@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        ArchiveEngine.rar5Reader = LibArchiveRar5
         val startFile = intent?.data?.path?.let(::File)?.takeIf { it.exists() }
         setContent { EightZipTheme { EightZipApp(this, startFile) } }
     }
@@ -116,6 +117,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     var busy by remember { mutableStateOf<String?>(null) }
     var busyFile by remember { mutableStateOf("") }
     var showCompress by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     var pwPrompt by remember { mutableStateOf<Pair<List<File>, Boolean>?>(null) } // archives, wrong-password flag
 
     var sortBy by rememberSaveable { mutableStateOf(SortBy.NAME) }
@@ -207,6 +209,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                     actions = {
                         IconButton({ selected = visible.toSet() }) { Icon(Icons.Filled.SelectAll, "Select all") }
                         IconButton({ showCompress = true }) { Icon(Icons.Filled.Archive, "Add to archive") }
+                        IconButton({ confirmDelete = true }) { Icon(Icons.Filled.Delete, "Delete") }
                         IconButton({
                             val archives = selected.filter { Format.detect(it) != null }
                             if (archives.isEmpty()) toast("Select an archive to extract") else doExtract(archives, null)
@@ -381,6 +384,32 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
             val dest = uniqueFile(dir, name.ifBlank { defaultName }, ".${fmt.ext}")
             run("Compressing", "Created ${dest.name}") { p -> ArchiveEngine.compress(src, dest, fmt, p, password) }
         }
+    }
+
+    if (confirmDelete) {
+        val victims = selected.toList()
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            icon = { Icon(Icons.Filled.Delete, null) },
+            title = { Text(if (victims.size == 1) "Delete ${victims[0].name}?" else "Delete ${victims.size} items?") },
+            text = {
+                Text(
+                    (if (victims.size > 1) victims.take(3).joinToString("\n") { "• ${it.name}" } +
+                        (if (victims.size > 3) "\n• and ${victims.size - 3} more" else "") + "\n\n" else "") +
+                        (if (victims.any { it.isDirectory }) "Folders are deleted with everything inside. " else "") +
+                        "This can't be undone."
+                )
+            },
+            confirmButton = {
+                TextButton({
+                    confirmDelete = false
+                    run("Deleting", if (victims.size == 1) "Deleted ${victims[0].name}" else "Deleted ${victims.size} items") { p ->
+                        victims.forEach { p.onFile(it.name); ArchiveEngine.deleteTree(it) }
+                    }
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } }
+        )
     }
 
     pwPrompt?.let { (archives, wrong) ->

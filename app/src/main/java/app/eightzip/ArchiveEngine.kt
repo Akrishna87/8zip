@@ -61,8 +61,32 @@ class WrongPasswordException : IOException("Wrong password (or the archive is co
 
 fun interface Progress { fun onFile(name: String) }
 
+/** Pluggable RAR5 reader (junrar can't read RAR5). The Android app installs a libarchive-backed one. */
+interface Rar5Reader {
+    fun list(archive: File): List<EntryInfo>
+    /** [resolve] maps an entry name to a safe output file (throws on path traversal). */
+    fun extract(archive: File, resolve: (String) -> File, progress: Progress)
+}
+
 /** Pure-JVM archive logic (no Android dependencies) so it can be unit tested. */
 object ArchiveEngine {
+
+    @Volatile var rar5Reader: Rar5Reader? = null
+    private const val RAR5_UNSUPPORTED = "RAR5 archives aren't supported on this device"
+
+    fun isRar5(f: File): Boolean = runCatching {
+        f.inputStream().use { i ->
+            val h = ByteArray(8)
+            i.read(h) == 8 && h.contentEquals(byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00))
+        }
+    }.getOrDefault(false)
+
+    /** Deletes files/folders recursively without ever following symlinks out of the tree. */
+    fun deleteTree(f: File) {
+        val isLink = f.parentFile?.let { File(it.canonicalFile, f.name).let { x -> x.canonicalPath != x.absolutePath } } ?: false
+        if (f.isDirectory && !isLink) f.listFiles()?.forEach { deleteTree(it) }
+        if (!f.delete() && f.exists()) throw IOException("Couldn't delete ${f.name}")
+    }
 
     /** Lists the contents of an archive. File names are readable without a password. */
     fun list(archive: File): List<EntryInfo> {
@@ -71,7 +95,9 @@ object ArchiveEngine {
             Format.ZIP -> ZipFile(archive).fileHeaders.forEach {
                 out += EntryInfo(it.fileName, it.uncompressedSize, it.isDirectory)
             }
-            Format.RAR -> openRar(archive, null).use { a ->
+            Format.RAR -> if (isRar5(archive)) {
+                out += (rar5Reader ?: throw IOException(RAR5_UNSUPPORTED)).list(archive)
+            } else openRar(archive, null).use { a ->
                 a.fileHeaders.forEach { out += EntryInfo(rarName(it), it.fullUnpackSize, it.isDirectory) }
             }
             Format.SEVEN_Z -> SevenZFile.builder().setFile(archive).get().use { z ->
@@ -159,6 +185,10 @@ object ArchiveEngine {
     }
 
     private fun extractRar(archive: File, root: File, progress: Progress, password: CharArray?) {
+        if (isRar5(archive)) {
+            (rar5Reader ?: throw IOException(RAR5_UNSUPPORTED)).extract(archive, { safeTarget(root, it) }, progress)
+            return
+        }
         val hasPw = password != null && password.isNotEmpty()
         openRar(archive, password).use { a ->
             val headers = a.fileHeaders
@@ -286,7 +316,7 @@ object ArchiveEngine {
         sources.forEach { rec(it, it.name) }
     }
 
-    private fun safeTarget(root: File, entryName: String): File {
+    internal fun safeTarget(root: File, entryName: String): File {
         val t = File(root, entryName).canonicalFile
         if (t.path != root.path && !t.path.startsWith(root.path + File.separator))
             throw IOException("Blocked unsafe entry path: $entryName")

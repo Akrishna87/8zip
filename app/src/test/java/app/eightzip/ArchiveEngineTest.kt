@@ -126,3 +126,64 @@ class RarTest {
         catch (e: java.io.IOException) { }
     }
 }
+
+
+class Rar5AndDeleteTest {
+    private fun rar5(): java.io.File {
+        val f = Files.createTempDirectory("8zip-rar5b").toFile().resolve("v5.rar")
+        f.writeBytes(javaClass.getResourceAsStream("/hello5.rar")!!.readBytes())
+        return f
+    }
+
+    @Test
+    fun detectsRar5Signature() {
+        assertTrue(ArchiveEngine.isRar5(rar5()))
+        val v4 = Files.createTempDirectory("8zip-v4").toFile().resolve("v4.rar")
+        v4.writeBytes(javaClass.getResourceAsStream("/hello.rar")!!.readBytes())
+        assertTrue(!ArchiveEngine.isRar5(v4))
+    }
+
+    @Test
+    fun rar5WithoutBackendIsFriendlyError() {
+        ArchiveEngine.rar5Reader = null
+        try { ArchiveEngine.list(rar5()); org.junit.Assert.fail() }
+        catch (e: java.io.IOException) { assertTrue(e.message.orEmpty(), e.message.orEmpty().contains("RAR5")) }
+    }
+
+    @Test
+    fun rar5IsRoutedToTheBackendWithSafePaths() {
+        val seen = mutableListOf<String>()
+        ArchiveEngine.rar5Reader = object : Rar5Reader {
+            override fun list(archive: java.io.File) = listOf(EntryInfo("x.txt", 1, false))
+            override fun extract(archive: java.io.File, resolve: (String) -> java.io.File, progress: Progress) {
+                val out = resolve("dir/x.txt"); out.parentFile.mkdirs(); out.writeText("via backend"); progress.onFile("dir/x.txt"); seen += "ok"
+                try { resolve("../evil.txt"); org.junit.Assert.fail("traversal must be blocked") } catch (e: java.io.IOException) { seen += "blocked" }
+            }
+        }
+        try {
+            val rar = rar5()
+            assertEquals("x.txt", ArchiveEngine.list(rar).single().name)
+            val dest = rar.parentFile.resolve("o")
+            ArchiveEngine.extract(rar, dest)
+            assertEquals("via backend", dest.resolve("dir/x.txt").readText())
+            assertEquals(listOf("ok", "blocked"), seen)
+        } finally { ArchiveEngine.rar5Reader = null }
+    }
+
+    @Test
+    fun deleteTreeRemovesFoldersButNeverFollowsSymlinks() {
+        val tmp = Files.createTempDirectory("8zip-del").toFile()
+        val keep = tmp.resolve("keep").apply { mkdirs() }
+        keep.resolve("precious.txt").writeText("do not delete")
+        val victim = tmp.resolve("victim").apply { mkdirs() }
+        victim.resolve("a.txt").writeText("a")
+        victim.resolve("sub").mkdirs(); victim.resolve("sub/b.txt").writeText("b")
+        Files.createSymbolicLink(victim.resolve("link").toPath(), keep.toPath())
+        ArchiveEngine.deleteTree(victim)
+        assertTrue(!victim.exists())
+        assertEquals("do not delete", keep.resolve("precious.txt").readText())
+        val single = tmp.resolve("one.txt").apply { writeText("x") }
+        ArchiveEngine.deleteTree(single)
+        assertTrue(!single.exists())
+    }
+}

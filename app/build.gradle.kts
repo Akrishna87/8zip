@@ -46,6 +46,8 @@ dependencies {
     implementation("net.lingala.zip4j:zip4j:2.11.5")
     // RAR extraction (RAR 1-4; RAR5 is not supported by this library)
     implementation("com.github.junrar:junrar:7.5.5")
+    // RAR5 reading via libarchive (native, Android only)
+    implementation("me.zhanghai.android.libarchive:library:1.1.4")
 
     testImplementation("junit:junit:4.13.2")
 }
