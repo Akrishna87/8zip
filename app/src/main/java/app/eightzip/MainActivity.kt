@@ -34,7 +34,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -387,11 +390,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
             icon = { Icon(Icons.Filled.Lock, null) },
             title = { Text("Password required") },
             text = {
-                OutlinedTextField(
-                    value = pw, onValueChange = { pw = it }, singleLine = true, isError = wrong,
-                    label = { Text(if (wrong) "Wrong password, try again" else "Password") },
-                    visualTransformation = PasswordVisualTransformation()
-                )
+                PasswordField(pw, { pw = it }, if (wrong) "Wrong password, try again" else "Password", isError = wrong)
             },
             confirmButton = { TextButton(enabled = pw.isNotEmpty(), onClick = { pwPrompt = null; doExtract(archives, pw.toCharArray()) }) { Text("Extract") } },
             dismissButton = { TextButton({ pwPrompt = null }) { Text("Cancel") } }
@@ -417,11 +416,10 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
                         FilterChip(selected = fmt == f, onClick = { fmt = f }, label = { Text(f.label) })
                     }
                 }
-                OutlinedTextField(
+                PasswordField(
                     value = if (fmt.supportsPassword) pw else "", onValueChange = { pw = it },
-                    enabled = fmt.supportsPassword, singleLine = true,
-                    label = { Text(if (fmt.supportsPassword) "Password (optional, AES-256)" else "No password support for ${fmt.label}") },
-                    visualTransformation = PasswordVisualTransformation()
+                    label = if (fmt.supportsPassword) "Password (optional, AES-256)" else "No password support for ${fmt.label}",
+                    enabled = fmt.supportsPassword
                 )
             }
         },
@@ -429,5 +427,32 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
             TextButton({ onConfirm(name.trim(), fmt, if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null) }) { Text("Compress") }
         },
         dismissButton = { TextButton(onDismiss) { Text("Cancel") } }
+    )
+}
+
+/** Password input with an eye button that toggles between hidden and visible text. */
+@Composable
+private fun PasswordField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    isError: Boolean = false,
+    enabled: Boolean = true
+) {
+    var visible by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value, onValueChange = onValueChange,
+        enabled = enabled, isError = isError, singleLine = true,
+        label = { Text(label) },
+        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+        trailingIcon = {
+            if (enabled) IconButton({ visible = !visible }) {
+                Icon(
+                    if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (visible) "Hide password" else "Show password"
+                )
+            }
+        }
     )
 }
