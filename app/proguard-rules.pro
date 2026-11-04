@@ -1,0 +1,3 @@
+-dontwarn org.apache.commons.compress.**
+-dontwarn org.tukaani.xz.**
+-keep class org.apache.commons.compress.** { *; }
