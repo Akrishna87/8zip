@@ -20,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     var busy by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var showFormats by remember { mutableStateOf(false) }
+    var pwPrompt by remember { mutableStateOf<Pair<List<File>, Boolean>?>(null) } // archives to extract, wrong-password flag
 
     fun refresh() {
         files = (dir.listFiles() ?: emptyArray())
@@ -79,6 +81,23 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
             .onFailure { message = "Cannot open: ${it.message}" }
     }
 
+    fun doExtract(archives: List<File>, password: CharArray?) = scope.launch {
+        busy = "Extract"
+        val err = withContext(Dispatchers.IO) {
+            runCatching {
+                archives.forEach { ArchiveEngine.extract(it, File(it.parentFile, it.name.substringBefore('.')), password = password) }
+            }.exceptionOrNull()
+        }
+        busy = null
+        when (err) {
+            null -> message = "Extract done"
+            is PasswordRequiredException -> pwPrompt = archives to false
+            is WrongPasswordException -> pwPrompt = archives to true
+            else -> message = "Failed: ${err.message}"
+        }
+        refresh()
+    }
+
     BackHandler(enabled = viewing != null || dir != root) {
         if (viewing != null) viewing = null else dir.parentFile?.let { dir = it }
     }
@@ -90,14 +109,13 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                 actions = {
                     if (viewing != null) {
                         IconButton(onClick = {
-                            val a = viewing!!.first
-                            run("Extract") { ArchiveEngine.extract(a, File(a.parentFile, a.name.substringBefore('.'))) }
+                            doExtract(listOf(viewing!!.first), null)
                         }) { Icon(Icons.Default.Unarchive, "Extract here") }
                     } else if (selected.isNotEmpty()) {
                         IconButton(onClick = { showFormats = true }) { Icon(Icons.Default.Archive, "Add to archive") }
                         IconButton(onClick = {
                             val archives = selected.filter { Format.detect(it) != null }
-                            run("Extract") { archives.forEach { ArchiveEngine.extract(it, File(it.parentFile, it.name.substringBefore('.'))) } }
+                            if (archives.isEmpty()) message = "Select an archive to extract" else doExtract(archives, null)
                         }) { Icon(Icons.Default.Unarchive, "Extract") }
                     }
                 }
@@ -160,24 +178,61 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     }
 
     if (showFormats) {
+        var fmt by remember { mutableStateOf(Format.SEVEN_Z) }
+        var pw by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showFormats = false },
             title = { Text("Add to archive") },
             text = {
                 Column {
-                    Format.values().forEach { fmt ->
-                        TextButton(onClick = {
-                            showFormats = false
-                            val src = selected.toList()
-                            val base = if (src.size == 1) src[0].nameWithoutExtension else dir.name.ifEmpty { "archive" }
-                            val dest = File(dir, "$base.${fmt.ext}")
-                            run("Compress") { ArchiveEngine.compress(src, dest, fmt) }
-                        }) { Text(fmt.label) }
+                    Format.values().forEach { f ->
+                        Row(Modifier.fillMaxWidth().clickable { fmt = f }, verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(fmt == f, { fmt = f }); Text(f.label)
+                        }
                     }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = if (fmt.supportsPassword) pw else "",
+                        onValueChange = { pw = it },
+                        enabled = fmt.supportsPassword,
+                        label = { Text(if (fmt.supportsPassword) "Password (optional)" else "Password not supported for ${fmt.label}") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true
+                    )
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                TextButton(onClick = {
+                    showFormats = false
+                    val src = selected.toList()
+                    val base = if (src.size == 1) src[0].nameWithoutExtension else dir.name.ifEmpty { "archive" }
+                    val dest = File(dir, "$base.${fmt.ext}")
+                    val password = if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null
+                    run("Compress") { ArchiveEngine.compress(src, dest, fmt, password = password) }
+                }) { Text("Compress") }
+            },
             dismissButton = { TextButton({ showFormats = false }) { Text("Cancel") } }
+        )
+    }
+
+    pwPrompt?.let { (archives, wrong) ->
+        var pw by remember(archives) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { pwPrompt = null },
+            title = { Text("Password required") },
+            text = {
+                OutlinedTextField(
+                    value = pw, onValueChange = { pw = it },
+                    label = { Text(if (wrong) "Wrong password, try again" else "Enter password") },
+                    isError = wrong,
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = pw.isNotEmpty(), onClick = { pwPrompt = null; doExtract(archives, pw.toCharArray()) }) { Text("Extract") }
+            },
+            dismissButton = { TextButton({ pwPrompt = null }) { Text("Cancel") } }
         )
     }
 }

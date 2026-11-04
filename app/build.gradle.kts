@@ -42,6 +42,8 @@ dependencies {
     // Archive formats: zip, 7z (LZMA2), tar, tar.gz
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("org.tukaani:xz:1.10")
+    // AES-256 encrypted zip read/write
+    implementation("net.lingala.zip4j:zip4j:2.11.5")
 
     testImplementation("junit:junit:4.13.2")
 }
