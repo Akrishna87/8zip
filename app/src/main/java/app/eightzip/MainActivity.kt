@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -121,7 +122,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                 viewing != null -> LazyColumn {
                     items(viewing!!.second) { e ->
                         ListItem(
-                            leadingContent = { Icon(if (e.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null) },
+                            leadingContent = { Icon(if (e.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile, null) },
                             headlineContent = { Text(e.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             supportingContent = { if (!e.isDirectory) Text(humanSize(e.size)) }
                         )
@@ -143,7 +144,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                             },
                             headlineContent = { Text(f.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             supportingContent = { Text(if (f.isDirectory) "Folder" else humanSize(f.length())) },
-                            trailingContent = { Icon(if (f.isDirectory) Icons.Default.Folder else if (Format.detect(f) != null) Icons.Default.FolderZip else Icons.Default.InsertDriveFile, null) }
+                            trailingContent = { Icon(if (f.isDirectory) Icons.Default.Folder else if (Format.detect(f) != null) Icons.Default.FolderZip else Icons.AutoMirrored.Filled.InsertDriveFile, null) }
                         )
                     }
                 }
