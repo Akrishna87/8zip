@@ -1,5 +1,8 @@
 package app.eightzip
 
+import com.github.junrar.Archive
+import com.github.junrar.exception.CrcErrorException
+import com.github.junrar.exception.UnsupportedRarV5Exception
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.exception.ZipException
 import net.lingala.zip4j.model.ZipParameters
@@ -25,11 +28,13 @@ import java.io.InputStream
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
-enum class Format(val label: String, val ext: String, val supportsPassword: Boolean) {
-    SEVEN_Z("7z", "7z", true),
-    ZIP("zip", "zip", true),
-    TAR("tar", "tar", false),
-    TAR_GZ("tar.gz", "tar.gz", false);
+/** [canCreate]: we can write this format. [supportsPassword]: we can encrypt it when writing. */
+enum class Format(val label: String, val ext: String, val canCreate: Boolean, val supportsPassword: Boolean) {
+    SEVEN_Z("7z", "7z", true, true),
+    ZIP("zip", "zip", true, true),
+    TAR("tar", "tar", true, false),
+    TAR_GZ("tar.gz", "tar.gz", true, false),
+    RAR("rar", "rar", false, false); // extract only
 
     companion object {
         fun detect(file: File): Format? {
@@ -39,6 +44,7 @@ enum class Format(val label: String, val ext: String, val supportsPassword: Bool
                 n.endsWith(".zip") || n.endsWith(".jar") || n.endsWith(".apk") -> ZIP
                 n.endsWith(".tar.gz") || n.endsWith(".tgz") -> TAR_GZ
                 n.endsWith(".tar") -> TAR
+                n.endsWith(".rar") -> RAR
                 else -> null
             }
         }
@@ -65,6 +71,9 @@ object ArchiveEngine {
             Format.ZIP -> ZipFile(archive).fileHeaders.forEach {
                 out += EntryInfo(it.fileName, it.uncompressedSize, it.isDirectory)
             }
+            Format.RAR -> openRar(archive, null).use { a ->
+                a.fileHeaders.forEach { out += EntryInfo(rarName(it), it.fullUnpackSize, it.isDirectory) }
+            }
             Format.SEVEN_Z -> SevenZFile.builder().setFile(archive).get().use { z ->
                 var e: SevenZArchiveEntry? = z.nextEntry
                 while (e != null) { out += EntryInfo(e.name, e.size, e.isDirectory); e = z.nextEntry }
@@ -90,6 +99,7 @@ object ArchiveEngine {
             when (Format.detect(archive) ?: throw IOException("Unsupported archive type")) {
                 Format.ZIP -> extractZip(archive, root, progress, password)
                 Format.SEVEN_Z -> extract7z(archive, root, progress, password)
+                Format.RAR -> extractRar(archive, root, progress, password)
                 else -> openStream(archive).use { s ->
                     var e: ArchiveEntry? = s.nextEntry
                     while (e != null) {
@@ -138,6 +148,40 @@ object ArchiveEngine {
         }
     }
 
+    private fun rarName(h: com.github.junrar.rarfile.FileHeader) = h.fileName.replace('\\', '/')
+
+    private fun openRar(archive: File, password: CharArray?): Archive = try {
+        if (password != null && password.isNotEmpty()) Archive(archive, String(password)) else Archive(archive)
+    } catch (e: UnsupportedRarV5Exception) {
+        throw IOException("RAR5 archives aren't supported yet (RAR 1-4 only)")
+    } catch (e: com.github.junrar.exception.RarException) {
+        throw IOException("Not a valid RAR archive: ${e.message}")
+    }
+
+    private fun extractRar(archive: File, root: File, progress: Progress, password: CharArray?) {
+        val hasPw = password != null && password.isNotEmpty()
+        openRar(archive, password).use { a ->
+            val headers = a.fileHeaders
+            if (!hasPw && headers.any { it.isEncrypted }) throw PasswordRequiredException(archive.name)
+            try {
+                for (h in headers) {
+                    val name = rarName(h)
+                    val target = safeTarget(root, name)
+                    progress.onFile(name)
+                    if (h.isDirectory) target.mkdirs() else {
+                        target.parentFile?.mkdirs()
+                        target.outputStream().buffered().use { a.extractFile(h, it) }
+                    }
+                }
+            } catch (e: CrcErrorException) {
+                // Bad checksum: with a password this means it decrypted to garbage.
+                if (hasPw) throw WrongPasswordException() else throw IOException("Corrupt RAR data (CRC mismatch)")
+            } catch (e: com.github.junrar.exception.RarException) {
+                if (hasPw) throw WrongPasswordException() else throw IOException(e.message ?: "RAR error", e)
+            }
+        }
+    }
+
     private fun extract7z(archive: File, root: File, progress: Progress, password: CharArray?) {
         val builder = SevenZFile.builder().setFile(archive)
         if (password != null && password.isNotEmpty()) builder.setPassword(password)
@@ -173,6 +217,7 @@ object ArchiveEngine {
      */
     fun compress(sources: List<File>, dest: File, format: Format, progress: Progress = Progress {}, password: CharArray? = null) {
         val pw = password?.takeIf { it.isNotEmpty() }
+        if (!format.canCreate) throw IOException("${format.label} archives can only be extracted, not created")
         if (pw != null && !format.supportsPassword) throw IOException("${format.label} archives can't be password protected")
         dest.parentFile?.mkdirs()
         when (format) {
@@ -199,6 +244,7 @@ object ArchiveEngine {
                     z.closeArchiveEntry()
                 }
             }
+            Format.RAR -> throw IOException("Creating RAR archives isn't supported")
             Format.TAR, Format.TAR_GZ -> {
                 val raw = BufferedOutputStream(dest.outputStream())
                 val sink = if (format == Format.TAR_GZ) GZIPOutputStream(raw) else raw

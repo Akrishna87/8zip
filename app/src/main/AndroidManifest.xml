@@ -11,7 +11,7 @@
         android:icon="@drawable/ic_launcher"
         android:label="8zip"
         android:requestLegacyExternalStorage="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.EightZip">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -26,6 +26,8 @@
                 <data android:mimeType="application/x-7z-compressed" />
                 <data android:mimeType="application/x-tar" />
                 <data android:mimeType="application/gzip" />
+                <data android:mimeType="application/vnd.rar" />
+                <data android:mimeType="application/x-rar-compressed" />
             </intent-filter>
         </activity>
     </application>

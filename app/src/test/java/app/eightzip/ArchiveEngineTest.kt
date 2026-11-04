@@ -14,7 +14,7 @@ class ArchiveEngineTest {
         src.resolve("sub").mkdirs()
         src.resolve("sub/b.txt").writeText("world")
 
-        for (fmt in Format.values()) {
+        for (fmt in Format.values().filter { it.canCreate }) {
             val archive = tmp.resolve("out.${fmt.ext}")
             ArchiveEngine.compress(listOf(src), archive, fmt)
             assertTrue(ArchiveEngine.list(archive).any { it.name.endsWith("a.txt") })
@@ -83,6 +83,46 @@ class PasswordArchiveTest {
     fun tarRejectsPassword() {
         val (tmp, src) = fixture()
         try { ArchiveEngine.compress(listOf(src), tmp.resolve("x.tar"), Format.TAR, password = "pw".toCharArray()); org.junit.Assert.fail() }
+        catch (e: java.io.IOException) { }
+    }
+}
+
+class RarTest {
+    private fun rarFile(name: String = "t.rar"): java.io.File {
+        val f = Files.createTempDirectory("8zip-rar").toFile().resolve(name)
+        f.writeBytes(javaClass.getResourceAsStream("/hello.rar")!!.readBytes())
+        return f
+    }
+
+    @Test
+    fun listsAndExtractsRar4() {
+        val rar = rarFile()
+        assertEquals("hello.txt", ArchiveEngine.list(rar).single().name)
+        val dest = rar.parentFile.resolve("out")
+        ArchiveEngine.extract(rar, dest)
+        assertEquals("hello from rar\n", dest.resolve("hello.txt").readText())
+    }
+
+    @Test
+    fun rar5GivesFriendlyError() {
+        val f = Files.createTempDirectory("8zip-rar5").toFile().resolve("v5.rar")
+        f.writeBytes(byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00) + ByteArray(64))
+        try { ArchiveEngine.list(f); org.junit.Assert.fail("expected IOException") }
+        catch (e: java.io.IOException) { assertTrue(e.message.orEmpty(), e.message.orEmpty().contains("RAR5")) }
+    }
+
+    @Test
+    fun garbageRarIsAnError() {
+        val f = Files.createTempDirectory("8zip-bad").toFile().resolve("bad.rar")
+        f.writeText("this is not a rar file at all")
+        try { ArchiveEngine.extract(f, f.parentFile.resolve("o")); org.junit.Assert.fail("expected IOException") }
+        catch (e: java.io.IOException) { }
+    }
+
+    @Test
+    fun rarCannotBeCreated() {
+        val tmp = Files.createTempDirectory("8zip-nocreate").toFile()
+        try { ArchiveEngine.compress(listOf(tmp), tmp.resolve("x.rar"), Format.RAR); org.junit.Assert.fail() }
         catch (e: java.io.IOException) { }
     }
 }
