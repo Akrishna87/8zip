@@ -12,11 +12,26 @@ android {
         applicationId = "app.eightzip"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes the run number so every release has a higher versionCode.
+        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
+        versionName = "0.1.${System.getenv("VERSION_CODE") ?: "0"}"
+    }
+    signingConfigs {
+        // The key is committed encrypted (PKCS12, AES-256); its password lives in the
+        // ANDROID_KEYSTORE_PASSWORD secret. Without it the release build is simply unsigned.
+        System.getenv("ANDROID_KEYSTORE_PASSWORD")?.filterNot { it.isWhitespace() }?.let { pw ->
+            create("release") {
+                storeFile = file("release.p12")
+                storeType = "pkcs12"
+                storePassword = pw
+                keyAlias = "eightzip"
+                keyPassword = pw
+            }
+        }
     }
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

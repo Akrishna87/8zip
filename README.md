@@ -18,7 +18,18 @@ Built on Apache Commons Compress, XZ for Java and zip4j and junrar and libarchiv
 ```bash
 gradle :app:testDebugUnitTest :app:assembleDebug
 ```
-Requires JDK 17 and the Android SDK (compileSdk 35). CI builds the APK on every push.
+Requires JDK 17 and the Android SDK (compileSdk 35).
+
+### Releases
+CI runs the tests on every push; pushes to `main` also build a **signed** release APK and publish it as a GitHub Release:
+https://github.com/Akrishna87/8zip/releases/latest/download/8zip.apk
+
+Signing key: `app/release.p12` (encrypted PKCS12, alias `eightzip`). Add its password as the repository secret `ANDROID_KEYSTORE_PASSWORD`. Local signed build:
+```bash
+ANDROID_KEYSTORE_PASSWORD=... gradle :app:assembleRelease
+```
+
+
 
 ## Roadmap
 encrypted RAR5 and ISO read support, SAF/content-URI support, split archives.
