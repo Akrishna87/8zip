@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_downloads_short">Downloads</string>
+    <string name="shortcut_downloads_long">Open Downloads</string>
+    <string name="shortcut_trash_short">Trash</string>
+    <string name="shortcut_trash_long">Open Trash</string>
+    <string name="shortcut_select_short">Compress</string>
+    <string name="shortcut_select_long">Select files to compress</string>
+</resources>

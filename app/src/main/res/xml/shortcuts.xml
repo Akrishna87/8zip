@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="downloads"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_download"
+        android:shortcutShortLabel="@string/shortcut_downloads_short"
+        android:shortcutLongLabel="@string/shortcut_downloads_long">
+        <intent
+            android:action="app.eightzip.action.DOWNLOADS"
+            android:targetPackage="app.eightzip"
+            android:targetClass="app.eightzip.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="trash"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_trash"
+        android:shortcutShortLabel="@string/shortcut_trash_short"
+        android:shortcutLongLabel="@string/shortcut_trash_long">
+        <intent
+            android:action="app.eightzip.action.TRASH"
+            android:targetPackage="app.eightzip"
+            android:targetClass="app.eightzip.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="select"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_select"
+        android:shortcutShortLabel="@string/shortcut_select_short"
+        android:shortcutLongLabel="@string/shortcut_select_long">
+        <intent
+            android:action="app.eightzip.action.SELECT"
+            android:targetPackage="app.eightzip"
+            android:targetClass="app.eightzip.MainActivity" />
+    </shortcut>
+</shortcuts>

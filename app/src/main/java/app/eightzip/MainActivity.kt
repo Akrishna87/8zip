@@ -244,6 +244,12 @@ fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
     // "Open with 8zip" / "Share to 8zip": turn the intent into archive files and show them.
     LaunchedEffect(Unit) {
         val inc = launchIntent
+        // Long-press shortcuts on the app icon.
+        when (inc?.action) {
+            "app.eightzip.action.DOWNLOADS" -> { dir = File(root, "Download").takeIf { it.isDirectory } ?: root; return@LaunchedEffect }
+            "app.eightzip.action.TRASH" -> { openTrash(); return@LaunchedEffect }
+            "app.eightzip.action.SELECT" -> { selectMode = true; return@LaunchedEffect }
+        }
         if (!Incoming.isIncoming(inc)) return@LaunchedEffect
         busy = "Opening"; busyFile = ""
         val files = withContext(Dispatchers.IO) { Incoming.resolve(activity, inc!!, root) }

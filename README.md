@@ -8,6 +8,7 @@ A 7-Zip-style file manager and archiver for Android (Kotlin + Jetpack Compose).
 - Multiple selection: tap the checklist button (or long-press / tap a plain file) to select many items, then select all/none, compress, extract or delete them together
 - Open an archive and tick just the files/folders you want, then extract only those (all formats, incl. passworded; a folder takes everything inside)
 - **Open from other apps:** "Open with 8zip" for `content://` and `file://` links (browsers, mail, chat, file managers) and "Share to 8zip" for one or several archives. Files are read in place when possible, otherwise copied to a temporary cache (extracted into `Download`, then the copy is removed). Archives with useless names (`download.bin`) are recognised from their contents
+- **Icon shortcuts:** long-press the app icon for Downloads, Trash and Compress (opens in selection mode)
 - Adaptive app icon (with Android 13 themed-icon support) and a splash screen
 - **Trash:** deleting moves items to a hidden `.8zip-trash` folder (instant, same volume). Open the Trash chip to restore (never overwrites; recreates missing folders), delete forever, or empty it. Items are purged after 30 days. "Delete permanently instead" skips it
 - **Delete originals (opt-in):** tick "Delete originals afterwards" when compressing (only after the archive is re-read and verified to hold every file; originals go to the Trash), or turn on "Delete archive after extracting" in the sort/view menu (only after a fully successful, non-partial extract; the archive goes to the Trash)

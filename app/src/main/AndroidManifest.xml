@@ -21,6 +21,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press the app icon: Downloads / Trash / Compress -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
             <!-- "Open with 8zip" from browsers, mail, chat and file managers (content:// and file://) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
