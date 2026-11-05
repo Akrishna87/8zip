@@ -57,8 +57,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ArchiveEngine.rar5Reader = LibArchiveRar5
-        val startFile = intent?.data?.path?.let(::File)?.takeIf { it.exists() }
-        setContent { EightZipTheme { EightZipApp(this, startFile) } }
+        setContent { EightZipTheme { EightZipApp(this, intent) } }
     }
 }
 
@@ -113,13 +112,13 @@ private fun iconFor(name: String, isDir: Boolean): ImageVector {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun EightZipApp(activity: ComponentActivity, startFile: File?) {
+fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val root = remember { Environment.getExternalStorageDirectory() }
 
     var allowed by remember { mutableStateOf(hasAllFilesAccess()) }
-    var dir by remember { mutableStateOf(startFile?.parentFile ?: root) }
+    var dir by remember { mutableStateOf(root) }
     var files by remember { mutableStateOf(emptyList<File>()) }
     var selected by remember { mutableStateOf(setOf<File>()) }
     var selectMode by remember { mutableStateOf(false) } // explicit "Select" mode, also entered by long-press
@@ -136,6 +135,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     var trashItems by remember { mutableStateOf(emptyList<Trash.Item>()) }
     var trashSel by remember { mutableStateOf(setOf<String>()) }
     var confirm by remember { mutableStateOf<Confirm?>(null) }
+    var incomingMulti by remember { mutableStateOf<List<File>?>(null) } // several archives shared at once
     var pwPrompt by remember { mutableStateOf<PwRequest?>(null) }
     var viewSelected by remember { mutableStateOf(setOf<String>()) } // entry names picked inside the open archive
     var viewSelectMode by remember { mutableStateOf(false) }
@@ -199,13 +199,20 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     fun doExtract(archives: List<File>, password: CharArray?, only: List<String>? = null) = scope.launch {
         busy = "Extracting"; busyFile = ""
         var deleted = 0
+        var toDownload = false
         val err = withContext(Dispatchers.IO) {
             runCatching {
                 archives.forEach {
-                    val out = uniqueFile(it.parentFile ?: dir, archiveBase(it))
+                    // An archive that reached us as a content:// link lives in our cache: extract into Download instead.
+                    val temp = Incoming.isTemp(activity, it)
+                    val parent = if (temp) File(root, "Download").also { d -> d.mkdirs() } else it.parentFile ?: dir
+                    if (temp) toDownload = true
+                    val out = uniqueFile(parent, archiveBase(it))
                     ArchiveEngine.extract(it, out, Progress { n -> busyFile = n }, password, only)
-                    // Only after the whole archive extracted without error, and never for a partial extract.
-                    if (deleteAfterExtract && only == null) { trash.moveToTrash(it); deleted++ }
+                    if (only == null) {
+                        if (temp) it.delete()                                          // our own copy: just tidy up
+                        else if (deleteAfterExtract) { trash.moveToTrash(it); deleted++ } // the user's file: to the Trash
+                    }
                 }
             }.exceptionOrNull()
         }
@@ -218,8 +225,8 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                 val gone = if (deleted > 0) (if (deleted == 1) " and moved the archive to Trash" else " and moved the archives to Trash") else ""
                 toast(when {
                     only != null -> "Extracted ${only.size} selected item" + (if (only.size == 1) "" else "s")
-                    archives.size == 1 -> "Extracted ${archiveBase(archives[0])}$gone"
-                    else -> "Extracted ${archives.size} archives$gone"
+                    archives.size == 1 -> "Extracted ${archiveBase(archives[0])}${if (toDownload) " to Download" else ""}$gone"
+                    else -> "Extracted ${archives.size} archives${if (toDownload) " to Download" else ""}$gone"
                 })
             }
             is PasswordRequiredException -> pwPrompt = PwRequest(archives, false, only)
@@ -232,6 +239,26 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         runCatching { withContext(Dispatchers.IO) { ArchiveEngine.list(f) } }
             .onSuccess { viewing = f to it; viewSelected = emptySet(); viewSelectMode = false }
             .onFailure { toast("Can't open: ${it.message}") }
+    }
+
+    // "Open with 8zip" / "Share to 8zip": turn the intent into archive files and show them.
+    LaunchedEffect(Unit) {
+        val inc = launchIntent
+        if (!Incoming.isIncoming(inc)) return@LaunchedEffect
+        busy = "Opening"; busyFile = ""
+        val files = withContext(Dispatchers.IO) { Incoming.resolve(activity, inc!!, root) }
+        busy = null
+        val archives = files.filter { Format.detect(it) != null }
+        when {
+            files.isEmpty() -> toast("Couldn't open that file")
+            archives.isEmpty() -> toast("That isn't a supported archive")
+            archives.size == 1 -> {
+                val f = archives[0]
+                if (!Incoming.isTemp(activity, f)) f.parentFile?.let { dir = it }
+                openArchive(f)
+            }
+            else -> incomingMulti = archives
+        }
     }
 
     val inSelection = selectMode || selected.isNotEmpty()
@@ -602,6 +629,17 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                 }) { Text("Move to Trash") }
             },
             dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } }
+        )
+    }
+
+    incomingMulti?.let { list ->
+        AlertDialog(
+            onDismissRequest = { incomingMulti = null },
+            icon = { Icon(Icons.Filled.FolderZip, null) },
+            title = { Text("${list.size} archives shared") },
+            text = { Text(list.take(5).joinToString("\n") { "• ${it.name}" } + if (list.size > 5) "\n• and ${list.size - 5} more" else "") },
+            confirmButton = { TextButton({ incomingMulti = null; doExtract(list, null) }) { Text("Extract all") } },
+            dismissButton = { TextButton({ incomingMulti = null }) { Text("Cancel") } }
         )
     }
 

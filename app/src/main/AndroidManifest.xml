@@ -21,17 +21,58 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Open archives from other apps -->
+            <!-- "Open with 8zip" from browsers, mail, chat and file managers (content:// and file://) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
                 <data android:scheme="file" />
                 <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
                 <data android:mimeType="application/x-7z-compressed" />
                 <data android:mimeType="application/x-tar" />
                 <data android:mimeType="application/gzip" />
+                <data android:mimeType="application/x-gzip" />
+                <data android:mimeType="application/x-gtar" />
+                <data android:mimeType="application/x-compressed-tar" />
                 <data android:mimeType="application/vnd.rar" />
                 <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/x-rar" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <!-- File managers that send a path but no MIME type -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.zip" />
+                <data android:pathPattern=".*\\.7z" />
+                <data android:pathPattern=".*\\.rar" />
+                <data android:pathPattern=".*\\.tar" />
+                <data android:pathPattern=".*\\.tgz" />
+                <data android:pathPattern=".*\\.gz" />
+            </intent-filter>
+            <!-- Share sheet: "Share to 8zip" for one or several archives -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/x-7z-compressed" />
+                <data android:mimeType="application/x-tar" />
+                <data android:mimeType="application/gzip" />
+                <data android:mimeType="application/x-gzip" />
+                <data android:mimeType="application/x-gtar" />
+                <data android:mimeType="application/x-compressed-tar" />
+                <data android:mimeType="application/vnd.rar" />
+                <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/x-rar" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
     </application>

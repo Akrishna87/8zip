@@ -416,3 +416,31 @@ class TrashTest {
         assertEquals("A", a.readText())
     }
 }
+
+
+class SniffTest {
+    @Test
+    fun identifiesEveryFormatFromItsBytesNotItsName() {
+        val tmp = Files.createTempDirectory("8zip-sniff").toFile()
+        val src = tmp.resolve("data").apply { mkdirs() }.also { it.resolve("a.txt").writeText("hello") }
+        for (fmt in Format.values().filter { it.canCreate }) {
+            val real = tmp.resolve("real.${fmt.ext}")
+            ArchiveEngine.compress(listOf(src), real, fmt)
+            val disguised = tmp.resolve("download_${fmt.ext}.bin").also { real.copyTo(it) }
+            assertEquals(fmt.label, fmt, ArchiveEngine.sniff(disguised))
+        }
+        val rar = tmp.resolve("x.dat").also { it.writeBytes(javaClass.getResourceAsStream("/hello.rar")!!.readBytes()) }
+        assertEquals(Format.RAR, ArchiveEngine.sniff(rar))
+        val rar5 = tmp.resolve("y.dat").also { it.writeBytes(javaClass.getResourceAsStream("/hello5.rar")!!.readBytes()) }
+        assertEquals(Format.RAR, ArchiveEngine.sniff(rar5))
+    }
+
+    @Test
+    fun nonArchivesAreNotMistaken() {
+        val tmp = Files.createTempDirectory("8zip-sniff2").toFile()
+        assertEquals(null, ArchiveEngine.sniff(tmp.resolve("text.txt").apply { writeText("just some text, long enough not to matter") }))
+        assertEquals(null, ArchiveEngine.sniff(tmp.resolve("empty").apply { writeBytes(ByteArray(0)) }))
+        assertEquals(null, ArchiveEngine.sniff(tmp.resolve("missing")))
+        assertEquals(null, ArchiveEngine.sniff(tmp.resolve("png").apply { writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)) }))
+    }
+}

@@ -81,6 +81,22 @@ object ArchiveEngine {
         }
     }.getOrDefault(false)
 
+    /** Works out the archive type from the file's first bytes (for downloads whose names say nothing). */
+    fun sniff(f: File): Format? = runCatching {
+        val b = ByteArray(262)
+        var n = 0
+        f.inputStream().use { i -> while (n < b.size) { val r = i.read(b, n, b.size - n); if (r < 0) break; n += r } }
+        fun starts(vararg v: Int) = n >= v.size && v.indices.all { (b[it].toInt() and 0xFF) == v[it] }
+        when {
+            starts(0x50, 0x4B, 0x03, 0x04) || starts(0x50, 0x4B, 0x05, 0x06) -> Format.ZIP
+            starts(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C) -> Format.SEVEN_Z
+            starts(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07) -> Format.RAR
+            starts(0x1F, 0x8B) -> Format.TAR_GZ
+            n >= 262 && String(b, 257, 5, Charsets.ISO_8859_1) == "ustar" -> Format.TAR
+            else -> null
+        }
+    }.getOrNull()
+
     /**
      * Builds the "is this entry wanted" test for a partial extraction. A name selects itself and,
      * if it is a folder, everything inside it. null means "everything".
