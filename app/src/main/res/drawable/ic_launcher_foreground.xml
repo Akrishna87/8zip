@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 8zip icon foreground: a zipper whose pull is a figure "8". Kept inside the 66dp adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M48,22h6v2.6h-6z M54,26h6v2.6h-6z M48,30h6v2.6h-6z M54,34h6v2.6h-6z M48,38h6v2.6h-6z M54,42h6v2.6h-6z M50.4,46h7.2a2.4,2.4 0 0 1 2.4,2.4v1.2000000000000002a2.4,2.4 0 0 1 -2.4,2.4h-7.2a2.4,2.4 0 0 1 -2.4,-2.4v-1.2000000000000002a2.4,2.4 0 0 1 2.4,-2.4z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3.0"
+        android:pathData="M48.5,60a5.5,5.5 0 1,0 11.0,0a5.5,5.5 0 1,0 -11.0,0 M47.0,72.5a7.0,7.0 0 1,0 14.0,0a7.0,7.0 0 1,0 -14.0,0" />
+</vector>

@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -51,6 +52,7 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen() // must come before super.onCreate
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ArchiveEngine.rar5Reader = LibArchiveRar5
@@ -113,6 +115,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     var dir by remember { mutableStateOf(startFile?.parentFile ?: root) }
     var files by remember { mutableStateOf(emptyList<File>()) }
     var selected by remember { mutableStateOf(setOf<File>()) }
+    var selectMode by remember { mutableStateOf(false) } // explicit "Select" mode, also entered by long-press
     var viewing by remember { mutableStateOf<Pair<File, List<EntryInfo>>?>(null) }
     var busy by remember { mutableStateOf<String?>(null) }
     var busyFile by remember { mutableStateOf("") }
@@ -137,6 +140,8 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     fun refresh() { files = dir.listFiles()?.toList() ?: emptyList() }
     LaunchedEffect(dir, allowed) { if (allowed) { refresh(); selected = emptySet(); query = ""; searching = false } }
 
+    fun clearSelection() { selected = emptySet(); selectMode = false }
+
     val visible = remember(files, sortBy, ascending, showHidden, query) {
         val cmp: Comparator<File> = when (sortBy) {
             SortBy.NAME -> compareBy<File> { it.name.lowercase() }
@@ -154,7 +159,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         val err = withContext(Dispatchers.IO) { runCatching { work(Progress { busyFile = it }) }.exceptionOrNull() }
         busy = null
         refresh()
-        if (err == null) { selected = emptySet(); toast(done) } else toast("Failed: ${err.message}")
+        if (err == null) { clearSelection(); toast(done) } else toast("Failed: ${err.message}")
     }
 
     fun doExtract(archives: List<File>, password: CharArray?) = scope.launch {
@@ -170,7 +175,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         busy = null
         refresh()
         when (err) {
-            null -> { selected = emptySet(); toast(if (archives.size == 1) "Extracted ${archiveBase(archives[0])}" else "Extracted ${archives.size} archives") }
+            null -> { clearSelection(); toast(if (archives.size == 1) "Extracted ${archiveBase(archives[0])}" else "Extracted ${archives.size} archives") }
             is PasswordRequiredException -> pwPrompt = archives to false
             is WrongPasswordException -> pwPrompt = archives to true
             else -> toast("Failed: ${err.message}")
@@ -183,11 +188,11 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
             .onFailure { toast("Can't open: ${it.message}") }
     }
 
-    val inSelection = selected.isNotEmpty()
+    val inSelection = selectMode || selected.isNotEmpty()
     BackHandler(enabled = viewing != null || inSelection || searching || dir != root) {
         when {
             viewing != null -> viewing = null
-            inSelection -> selected = emptySet()
+            inSelection -> clearSelection()
             searching -> { searching = false; query = "" }
             else -> dir.parentFile?.let { dir = it }
         }
@@ -204,16 +209,19 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                     actions = { IconButton({ doExtract(listOf(v.first), null) }) { Icon(Icons.Filled.Unarchive, "Extract") } }
                 )
                 inSelection -> TopAppBar(
-                    navigationIcon = { IconButton({ selected = emptySet() }) { Icon(Icons.Filled.Close, "Clear selection") } },
-                    title = { Text("${selected.size} selected") },
+                    navigationIcon = { IconButton({ clearSelection() }) { Icon(Icons.Filled.Close, "Exit selection") } },
+                    title = { Text(if (selected.isEmpty()) "Select items" else "${selected.size} selected") },
                     actions = {
-                        IconButton({ selected = visible.toSet() }) { Icon(Icons.Filled.SelectAll, "Select all") }
-                        IconButton({ showCompress = true }) { Icon(Icons.Filled.Archive, "Add to archive") }
-                        IconButton({ confirmDelete = true }) { Icon(Icons.Filled.Delete, "Delete") }
+                        val all = visible.isNotEmpty() && selected.size == visible.size
+                        IconButton({ selected = if (all) emptySet() else visible.toSet() }) {
+                            Icon(if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll, if (all) "Select none" else "Select all")
+                        }
+                        IconButton({ showCompress = true }, enabled = selected.isNotEmpty()) { Icon(Icons.Filled.Archive, "Add to archive") }
+                        IconButton({ confirmDelete = true }, enabled = selected.isNotEmpty()) { Icon(Icons.Filled.Delete, "Delete") }
                         IconButton({
                             val archives = selected.filter { Format.detect(it) != null }
                             if (archives.isEmpty()) toast("Select an archive to extract") else doExtract(archives, null)
-                        }) { Icon(Icons.Filled.Unarchive, "Extract") }
+                        }, enabled = selected.isNotEmpty()) { Icon(Icons.Filled.Unarchive, "Extract") }
                     }
                 )
                 searching -> {
@@ -238,6 +246,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                 else -> TopAppBar(
                     title = { Text("8zip") },
                     actions = {
+                        IconButton({ selectMode = true }) { Icon(Icons.Filled.Checklist, "Select multiple") }
                         IconButton({ searching = true }) { Icon(Icons.Filled.Search, "Search") }
                         Box {
                             IconButton({ sortMenu = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "Sort and view") }
@@ -342,10 +351,10 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                                             inSelection -> selected = if (isSel) selected - f else selected + f
                                             f.isDirectory -> dir = f
                                             Format.detect(f) != null && !f.name.endsWith(".apk", true) -> openArchive(f)
-                                            else -> toast("Long-press to select this file")
+                                            else -> { selectMode = true; selected = setOf(f) }
                                         }
                                     },
-                                    onLongClick = { selected = if (isSel) selected - f else selected + f }
+                                    onLongClick = { selectMode = true; selected = if (isSel) selected - f else selected + f }
                                 ),
                                 colors = ListItemDefaults.colors(containerColor = if (isSel) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent),
                                 leadingContent = {

@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.EightZip" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Shown while the app starts, then swapped for Theme.EightZip. -->
+    <style name="Theme.EightZip.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/ic_launcher_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.EightZip</item>
+    </style>
 </resources>
