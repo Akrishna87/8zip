@@ -444,3 +444,46 @@ class SniffTest {
         assertEquals(null, ArchiveEngine.sniff(tmp.resolve("png").apply { writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)) }))
     }
 }
+
+
+class LatestDownloadTest {
+    private fun file(dir: java.io.File, name: String, ageMs: Long, content: String = "x", now: Long): java.io.File =
+        dir.resolve(name).apply { writeText(content); setLastModified(now - ageMs) }
+
+    @Test
+    fun picksTheNewestArchiveAndIgnoresEverythingElse() {
+        val dir = Files.createTempDirectory("8zip-dl").toFile()
+        val now = System.currentTimeMillis()
+        file(dir, "old.zip", 5 * 86_400_000L, now = now)
+        val newest = file(dir, "new.7z", 60_000L, now = now)
+        file(dir, "newer.apk", 10_000L, now = now)                // installers don't count
+        file(dir, "tool.jar", 10_000L, now = now)
+        file(dir, "photo.jpg", 5_000L, now = now)                 // not an archive
+        file(dir, ".hidden.zip", 5_000L, now = now)               // hidden
+        file(dir, "empty.zip", 5_000L, content = "", now = now)   // empty
+        file(dir, "still-writing.zip", 500L, now = now)           // touched <2s ago: probably mid-download
+        file(dir, "movie.zip.crdownload", 5_000L, now = now)      // partial download
+        dir.resolve("folder.zip").mkdirs()                        // a folder, not a file
+        assertEquals(newest, LatestDownload.find(dir, now))
+    }
+
+    @Test
+    fun noArchivesMeansNull() {
+        val dir = Files.createTempDirectory("8zip-dl2").toFile()
+        val now = System.currentTimeMillis()
+        assertEquals(null, LatestDownload.find(dir, now))
+        file(dir, "notes.txt", 60_000L, now = now)
+        assertEquals(null, LatestDownload.find(dir, now))
+        assertEquals(null, LatestDownload.find(dir.resolve("missing"), now))
+    }
+
+    @Test
+    fun recognisesEveryArchiveType() {
+        val now = System.currentTimeMillis()
+        for (n in listOf("a.zip", "a.7z", "a.rar", "a.tar", "a.tar.gz", "a.tgz", "A.ZIP")) {
+            val dir = Files.createTempDirectory("8zip-dl3").toFile()
+            val f = file(dir, n, 60_000L, now = now)
+            assertEquals(n, f, LatestDownload.find(dir, now))
+        }
+    }
+}

@@ -52,6 +52,11 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+    override fun onStop() {
+        super.onStop()
+        runCatching { LatestDownloadWidget.refreshAll(this) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen() // must come before super.onCreate
         super.onCreate(savedInstanceState)
@@ -210,6 +215,7 @@ fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
                     val out = uniqueFile(parent, archiveBase(it))
                     ArchiveEngine.extract(it, out, Progress { n -> busyFile = n }, password, only)
                     if (only == null) {
+                        prefs.edit().putString("last_extracted", "${it.path}|${it.lastModified()}").apply()
                         if (temp) it.delete()                                          // our own copy: just tidy up
                         else if (deleteAfterExtract) { trash.moveToTrash(it); deleted++ } // the user's file: to the Trash
                     }
@@ -249,6 +255,17 @@ fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
             "app.eightzip.action.DOWNLOADS" -> { dir = File(root, "Download").takeIf { it.isDirectory } ?: root; return@LaunchedEffect }
             "app.eightzip.action.TRASH" -> { openTrash(); return@LaunchedEffect }
             "app.eightzip.action.SELECT" -> { selectMode = true; return@LaunchedEffect }
+            LatestDownloadWidget.ACTION_EXTRACT_LATEST, LatestDownloadWidget.ACTION_OPEN_LATEST -> {
+                val f = inc?.getStringExtra("path")?.let(::File)
+                dir = File(root, "Download").takeIf { it.isDirectory } ?: root
+                when {
+                    f == null || !f.isFile -> toast("That archive is no longer in Downloads")
+                    !hasAllFilesAccess() -> Unit // the permission screen is showing; tap the widget again after allowing
+                    inc.action == LatestDownloadWidget.ACTION_EXTRACT_LATEST -> doExtract(listOf(f), null)
+                    else -> openArchive(f)
+                }
+                return@LaunchedEffect
+            }
         }
         if (!Incoming.isIncoming(inc)) return@LaunchedEffect
         busy = "Opening"; busyFile = ""

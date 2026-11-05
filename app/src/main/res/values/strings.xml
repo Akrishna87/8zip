@@ -6,4 +6,13 @@
     <string name="shortcut_trash_long">Open Trash</string>
     <string name="shortcut_select_short">Compress</string>
     <string name="shortcut_select_long">Select files to compress</string>
+    <string name="widget_description">Shows your newest download archive with one-tap Extract</string>
+    <string name="widget_title">Latest download</string>
+    <string name="widget_extract">Extract</string>
+    <string name="widget_again">Again</string>
+    <string name="widget_extracted">extracted</string>
+    <string name="widget_none">No archives in Downloads</string>
+    <string name="widget_none_hint">Zip, 7z, RAR, tar files appear here</string>
+    <string name="widget_need_access">8zip needs file access</string>
+    <string name="widget_tap_to_grant">Tap to open 8zip and allow it</string>
 </resources>
