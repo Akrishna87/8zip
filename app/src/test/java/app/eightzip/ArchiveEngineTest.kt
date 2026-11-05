@@ -323,3 +323,96 @@ class DeleteOriginalsTest {
         assertTrue(sources.all { it.exists() })
     }
 }
+
+
+class TrashTest {
+    private fun setup(): Triple<java.io.File, Trash, java.io.File> {
+        val tmp = Files.createTempDirectory("8zip-trash").toFile()
+        val docs = tmp.resolve("docs").apply { mkdirs() }
+        return Triple(tmp, Trash(tmp.resolve(".8zip-trash")), docs)
+    }
+
+    @Test
+    fun trashAndRestoreAFileAndAFolder() {
+        val (_, trash, docs) = setup()
+        val file = docs.resolve("a.txt").apply { writeText("A") }
+        val folder = docs.resolve("pics").apply { mkdirs() }
+        folder.resolve("1.jpg").writeText("one"); folder.resolve("deep").mkdirs(); folder.resolve("deep/2.jpg").writeText("two")
+
+        trash.moveToTrash(file); trash.moveToTrash(folder)
+        assertTrue(!file.exists() && !folder.exists())
+        val items = trash.list()
+        assertEquals(setOf("a.txt", "pics"), items.map { it.name }.toSet())
+        assertTrue(items.first { it.name == "pics" }.isDirectory)
+        assertEquals(6L, items.first { it.name == "pics" }.size)   // "one" + "two"
+
+        for (it in items) trash.restore(it.id)
+        assertEquals("A", file.readText())
+        assertEquals("two", folder.resolve("deep/2.jpg").readText())
+        assertTrue(trash.list().isEmpty())
+    }
+
+    @Test
+    fun restoreNeverOverwritesAndRecreatesMissingFolders() {
+        val (_, trash, docs) = setup()
+        val f = docs.resolve("report.txt").apply { writeText("old") }
+        val item = trash.moveToTrash(f)
+        f.writeText("new one made since")                       // something took the name meanwhile
+        val back = trash.restore(item.id)
+        assertEquals("report (1).txt", back.name)
+        assertEquals("old", back.readText())
+        assertEquals("new one made since", f.readText())        // untouched
+
+        val g = docs.resolve("gone/inner.txt").apply { parentFile.mkdirs(); writeText("G") }
+        val item2 = trash.moveToTrash(g)
+        docs.resolve("gone").deleteRecursively()                // original folder no longer exists
+        assertEquals("G", trash.restore(item2.id).readText())
+        assertTrue(docs.resolve("gone/inner.txt").exists())
+    }
+
+    @Test
+    fun deletePermanentlyEmptyAndPurge() {
+        val (_, trash, docs) = setup()
+        val ids = (1..3).map { trash.moveToTrash(docs.resolve("f$it").apply { writeText("x") }).id }
+        trash.deletePermanently(ids[0])
+        assertEquals(2, trash.list().size)
+        assertEquals(0, trash.purgeDeletedBefore(0))                        // nothing is older than the epoch
+        assertEquals(2, trash.list().size)
+        assertEquals(2, trash.purgeDeletedBefore(System.currentTimeMillis() + 10_000))   // everything is older than "soon"
+        assertTrue(trash.list().isEmpty())
+        trash.moveToTrash(docs.resolve("g").apply { writeText("x") }); trash.empty()
+        assertTrue(trash.list().isEmpty())
+    }
+
+    @Test
+    fun refusesToTrashSomethingAlreadyInTheTrash() {
+        val (_, trash, docs) = setup()
+        trash.moveToTrash(docs.resolve("a").apply { writeText("x") })
+        val inside = trash.dir.listFiles()!!.first()
+        try { trash.moveToTrash(inside); org.junit.Assert.fail("expected IOException") } catch (e: java.io.IOException) { }
+        try { trash.moveToTrash(docs.resolve("missing")); org.junit.Assert.fail("expected IOException") } catch (e: java.io.IOException) { }
+    }
+
+    @Test
+    fun symlinksAreMovedNotFollowed() {
+        val (tmp, trash, docs) = setup()
+        val keep = tmp.resolve("keep").apply { mkdirs() }.also { it.resolve("precious.txt").writeText("safe") }
+        val folder = docs.resolve("withlink").apply { mkdirs() }
+        Files.createSymbolicLink(folder.resolve("link").toPath(), keep.toPath())
+        val item = trash.moveToTrash(folder)
+        trash.deletePermanently(item.id)
+        assertEquals("safe", keep.resolve("precious.txt").readText())
+    }
+
+    @Test
+    fun deleteOriginalsCanUseTheTrash() {
+        val (tmp, trash, docs) = setup()
+        val a = docs.resolve("a.txt").apply { writeText("A") }
+        val archive = tmp.resolve("out.zip")
+        ArchiveEngine.compress(listOf(a), archive, Format.ZIP)
+        ArchiveEngine.deleteSourcesAfterCompress(listOf(a), archive) { trash.moveToTrash(it) }
+        assertTrue(!a.exists())
+        trash.restore(trash.list().single().id)
+        assertEquals("A", a.readText())
+    }
+}

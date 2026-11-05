@@ -65,6 +65,9 @@ class MainActivity : ComponentActivity() {
 /** A pending password prompt: which archives, whether the last try was wrong, and the partial selection. */
 data class PwRequest(val archives: List<File>, val wrong: Boolean, val only: List<String>?)
 
+/** A generic "are you sure" dialog. */
+data class Confirm(val title: String, val text: String, val yes: String, val onYes: () -> Unit)
+
 enum class SortBy(val label: String) { NAME("Name"), SIZE("Size"), DATE("Date modified") }
 
 private val dateFmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
@@ -128,6 +131,11 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     var deleteAfterExtract by remember { mutableStateOf(prefs.getBoolean("delete_archive_after_extract", false)) }
     var confirmEnableDeleteAfterExtract by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    val trash = remember { Trash(File(root, ".8zip-trash")) }
+    var trashing by remember { mutableStateOf(false) }              // the Trash screen is open
+    var trashItems by remember { mutableStateOf(emptyList<Trash.Item>()) }
+    var trashSel by remember { mutableStateOf(setOf<String>()) }
+    var confirm by remember { mutableStateOf<Confirm?>(null) }
     var pwPrompt by remember { mutableStateOf<PwRequest?>(null) }
     var viewSelected by remember { mutableStateOf(setOf<String>()) } // entry names picked inside the open archive
     var viewSelectMode by remember { mutableStateOf(false) }
@@ -151,17 +159,34 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
 
     fun clearSelection() { selected = emptySet(); selectMode = false }
 
+    // Items older than 30 days are removed for good.
+    LaunchedEffect(allowed) {
+        if (allowed) withContext(Dispatchers.IO) { runCatching { trash.purgeDeletedBefore(System.currentTimeMillis() - Trash.RETENTION_MS) } }
+    }
+
     val visible = remember(files, sortBy, ascending, showHidden, query) {
         val cmp: Comparator<File> = when (sortBy) {
             SortBy.NAME -> compareBy<File> { it.name.lowercase() }
             SortBy.SIZE -> compareBy<File> { if (it.isDirectory) -1L else it.length() }
             SortBy.DATE -> compareBy<File> { it.lastModified() }
         }
-        files.filter { (showHidden || !it.name.startsWith(".")) && it.name.contains(query, ignoreCase = true) }
+        files.filter { it.name != ".8zip-trash" && (showHidden || !it.name.startsWith(".")) && it.name.contains(query, ignoreCase = true) }
             .sortedWith(compareBy<File> { !it.isDirectory }.then(if (ascending) cmp else cmp.reversed()))
     }
 
     fun toast(msg: String) { scope.launch { snack.showSnackbar(msg) } }
+
+    fun loadTrash() = scope.launch { trashItems = withContext(Dispatchers.IO) { trash.list() } }
+    fun openTrash() { trashing = true; trashSel = emptySet(); loadTrash() }
+    fun trashAction(label: String, done: String, work: () -> Unit) = scope.launch {
+        busy = label; busyFile = ""
+        val err = withContext(Dispatchers.IO) { runCatching(work).exceptionOrNull() }
+        busy = null
+        trashSel = emptySet()
+        trashItems = withContext(Dispatchers.IO) { trash.list() }
+        refresh()
+        toast(err?.let { "Failed: ${it.message}" } ?: done)
+    }
 
     fun run(label: String, done: String, work: (Progress) -> Unit) = scope.launch {
         busy = label; busyFile = ""
@@ -180,7 +205,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                     val out = uniqueFile(it.parentFile ?: dir, archiveBase(it))
                     ArchiveEngine.extract(it, out, Progress { n -> busyFile = n }, password, only)
                     // Only after the whole archive extracted without error, and never for a partial extract.
-                    if (deleteAfterExtract && only == null) { ArchiveEngine.deleteTree(it); deleted++ }
+                    if (deleteAfterExtract && only == null) { trash.moveToTrash(it); deleted++ }
                 }
             }.exceptionOrNull()
         }
@@ -190,7 +215,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
             null -> {
                 clearSelection(); viewSelected = emptySet(); viewSelectMode = false
                 if (deleted > 0) viewing = null // the archive being viewed is gone
-                val gone = if (deleted > 0) (if (deleted == 1) " and deleted the archive" else " and deleted the archives") else ""
+                val gone = if (deleted > 0) (if (deleted == 1) " and moved the archive to Trash" else " and moved the archives to Trash") else ""
                 toast(when {
                     only != null -> "Extracted ${only.size} selected item" + (if (only.size == 1) "" else "s")
                     archives.size == 1 -> "Extracted ${archiveBase(archives[0])}$gone"
@@ -210,8 +235,9 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     }
 
     val inSelection = selectMode || selected.isNotEmpty()
-    BackHandler(enabled = viewing != null || inSelection || searching || dir != root) {
+    BackHandler(enabled = trashing || viewing != null || inSelection || searching || dir != root) {
         when {
+            trashing -> if (trashSel.isNotEmpty()) trashSel = emptySet() else trashing = false
             viewing != null -> if (viewSelectMode || viewSelected.isNotEmpty()) { viewSelected = emptySet(); viewSelectMode = false } else viewing = null
             inSelection -> clearSelection()
             searching -> { searching = false; query = "" }
@@ -224,6 +250,38 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         topBar = {
             val v = viewing
             when {
+                trashing && trashSel.isNotEmpty() -> TopAppBar(
+                    navigationIcon = { IconButton({ trashSel = emptySet() }) { Icon(Icons.Filled.Close, "Clear selection") } },
+                    title = { Text("${trashSel.size} selected") },
+                    actions = {
+                        val all = trashItems.isNotEmpty() && trashSel.size == trashItems.size
+                        IconButton({ trashSel = if (all) emptySet() else trashItems.map { it.id }.toSet() }) {
+                            Icon(if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll, if (all) "Select none" else "Select all")
+                        }
+                        IconButton({
+                            val ids = trashSel.toList()
+                            trashAction("Restoring", if (ids.size == 1) "Restored 1 item" else "Restored ${ids.size} items") { ids.forEach { trash.restore(it) } }
+                        }) { Icon(Icons.Filled.RestoreFromTrash, "Restore") }
+                        IconButton({
+                            val ids = trashSel.toList()
+                            confirm = Confirm(
+                                "Delete ${if (ids.size == 1) "this item" else "${ids.size} items"} forever?",
+                                "This can't be undone.", "Delete forever"
+                            ) { trashAction("Deleting", "Deleted forever") { ids.forEach { trash.deletePermanently(it) } } }
+                        }) { Icon(Icons.Filled.DeleteForever, "Delete forever") }
+                    }
+                )
+                trashing -> TopAppBar(
+                    navigationIcon = { IconButton({ trashing = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                    title = { Text("Trash") },
+                    actions = {
+                        IconButton({
+                            confirm = Confirm(
+                                "Empty the Trash?", "Everything in it will be deleted forever. This can't be undone.", "Empty Trash"
+                            ) { trashAction("Emptying", "Trash emptied") { trash.empty() } }
+                        }, enabled = trashItems.isNotEmpty()) { Icon(Icons.Filled.DeleteSweep, "Empty Trash") }
+                    }
+                )
                 v != null && (viewSelectMode || viewSelected.isNotEmpty()) -> TopAppBar(
                     navigationIcon = { IconButton({ viewSelected = emptySet(); viewSelectMode = false }) { Icon(Icons.Filled.Close, "Exit selection") } },
                     title = { Text(if (viewSelected.isEmpty()) "Select items" else "${viewSelected.size} selected") },
@@ -303,7 +361,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                                     onClick = { ascending = !ascending }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Delete archive after extracting") },
+                                    text = { Text("Trash archive after extracting") },
                                     leadingIcon = { Checkbox(deleteAfterExtract, null) },
                                     onClick = {
                                         sortMenu = false
@@ -338,6 +396,33 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                             activity.startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${activity.packageName}")))
                         } else activity.requestPermissions(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), 1)
                     }) { Text("Open settings") }
+                }
+
+                trashing -> if (trashItems.isEmpty()) {
+                    Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Filled.Delete, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.outline)
+                        Text("Trash is empty", style = MaterialTheme.typography.titleMedium)
+                        Text("Deleted items are kept here for 30 days so you can restore them.", color = MaterialTheme.colorScheme.outline)
+                    }
+                } else LazyColumn(Modifier.fillMaxSize()) {
+                    items(trashItems, key = { it.id }) { t ->
+                        val sel = t.id in trashSel
+                        val from = File(t.originalPath).parent.orEmpty().removePrefix(root.path).ifEmpty { "/" }
+                        ListItem(
+                            modifier = Modifier.combinedClickable(
+                                onClick = { trashSel = if (sel) trashSel - t.id else trashSel + t.id },
+                                onLongClick = { trashSel = if (sel) trashSel - t.id else trashSel + t.id }
+                            ),
+                            colors = ListItemDefaults.colors(containerColor = if (sel) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent),
+                            leadingContent = {
+                                if (trashSel.isNotEmpty()) Checkbox(sel, null)
+                                else Icon(iconFor(t.name, t.isDirectory), null, tint = MaterialTheme.colorScheme.primary)
+                            },
+                            headlineContent = { Text(t.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            supportingContent = { Text("${dateFmt.format(t.deletedAt)} · from $from", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            trailingContent = { Text(humanSize(t.size), style = MaterialTheme.typography.bodySmall) }
+                        )
+                    }
                 }
 
                 v != null -> Column {
@@ -388,6 +473,12 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                             "Documents" to File(root, "Documents"), "DCIM" to File(root, "DCIM")).filter { it.second.isDirectory }
                         items(places) { (label, f) ->
                             FilterChip(selected = dir == f, onClick = { dir = f }, label = { Text(label) })
+                        }
+                        item {
+                            FilterChip(
+                                selected = false, onClick = { openTrash() }, label = { Text("Trash") },
+                                leadingIcon = { Icon(Icons.Filled.Delete, null, Modifier.size(18.dp)) }
+                            )
                         }
                     }
                     // breadcrumb
@@ -460,9 +551,9 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         CompressDialog(defaultName, onDismiss = { showCompress = false }) { name, fmt, password, deleteOriginals ->
             showCompress = false
             val dest = uniqueFile(dir, name.ifBlank { defaultName }, ".${fmt.ext}")
-            run("Compressing", "Created ${dest.name}" + if (deleteOriginals) " and deleted the originals" else "") { p ->
+            run("Compressing", "Created ${dest.name}" + if (deleteOriginals) " and moved the originals to Trash" else "") { p ->
                 ArchiveEngine.compress(src, dest, fmt, p, password)
-                if (deleteOriginals) ArchiveEngine.deleteSourcesAfterCompress(src, dest)
+                if (deleteOriginals) ArchiveEngine.deleteSourcesAfterCompress(src, dest) { trash.moveToTrash(it) }
             }
         }
     }
@@ -471,8 +562,8 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         AlertDialog(
             onDismissRequest = { confirmEnableDeleteAfterExtract = false },
             icon = { Icon(Icons.Filled.Delete, null) },
-            title = { Text("Delete archives after extracting?") },
-            text = { Text("After an archive is fully extracted it will be permanently deleted. Archives that fail to extract, and partial extracts of selected items, are never deleted.") },
+            title = { Text("Trash archives after extracting?") },
+            text = { Text("After an archive is fully extracted it is moved to the Trash (restore it from there). Archives that fail to extract, and partial extracts of selected items, are never moved.") },
             confirmButton = {
                 TextButton({
                     deleteAfterExtract = true
@@ -486,27 +577,41 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
 
     if (confirmDelete) {
         val victims = selected.toList()
+        val label = if (victims.size == 1) victims[0].name else "${victims.size} items"
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             icon = { Icon(Icons.Filled.Delete, null) },
-            title = { Text(if (victims.size == 1) "Delete ${victims[0].name}?" else "Delete ${victims.size} items?") },
+            title = { Text("Delete $label?") },
             text = {
-                Text(
-                    (if (victims.size > 1) victims.take(3).joinToString("\n") { "• ${it.name}" } +
-                        (if (victims.size > 3) "\n• and ${victims.size - 3} more" else "") + "\n\n" else "") +
-                        (if (victims.any { it.isDirectory }) "Folders are deleted with everything inside. " else "") +
-                        "This can't be undone."
-                )
+                Column {
+                    Text(
+                        (if (victims.size > 1) victims.take(3).joinToString("\n") { "• ${it.name}" } +
+                            (if (victims.size > 3) "\n• and ${victims.size - 3} more" else "") + "\n\n" else "") +
+                            "They'll be moved to the Trash, where you can restore them for 30 days."
+                    )
+                    TextButton({
+                        confirmDelete = false
+                        run("Deleting", "Permanently deleted $label") { p -> victims.forEach { p.onFile(it.name); ArchiveEngine.deleteTree(it) } }
+                    }) { Text("Delete permanently instead", color = MaterialTheme.colorScheme.error) }
+                }
             },
             confirmButton = {
                 TextButton({
                     confirmDelete = false
-                    run("Deleting", if (victims.size == 1) "Deleted ${victims[0].name}" else "Deleted ${victims.size} items") { p ->
-                        victims.forEach { p.onFile(it.name); ArchiveEngine.deleteTree(it) }
-                    }
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    run("Moving to Trash", "Moved $label to Trash") { p -> victims.forEach { p.onFile(it.name); trash.moveToTrash(it) } }
+                }) { Text("Move to Trash") }
             },
             dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } }
+        )
+    }
+
+    confirm?.let { c ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text(c.title) },
+            text = { Text(c.text) },
+            confirmButton = { TextButton({ confirm = null; c.onYes() }) { Text(c.yes, color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton({ confirm = null }) { Text("Cancel") } }
         )
     }
 
@@ -555,8 +660,8 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
                     Checkbox(deleteOriginals, null)
                     Spacer(Modifier.width(8.dp))
                     Column {
-                        Text("Delete originals afterwards")
-                        Text("Only after the archive is checked to contain every file", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text("Move originals to Trash afterwards")
+                        Text("Only after the archive is checked to contain every file; restore them from Trash", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     }
                 }
             }

@@ -96,7 +96,7 @@ object ArchiveEngine {
      * To be called after a successful [compress]: re-reads [archive], checks it holds every file from
      * [sources], and only then deletes the sources. Any doubt throws and leaves the originals alone.
      */
-    fun deleteSourcesAfterCompress(sources: List<File>, archive: File) {
+    fun deleteSourcesAfterCompress(sources: List<File>, archive: File, remove: (File) -> Unit = { deleteTree(it) }) {
         if (!archive.isFile || archive.length() == 0L) throw IOException("The archive wasn't created, so the originals were kept")
         val archivePath = archive.canonicalPath
         if (sources.any { archivePath == it.canonicalPath || archivePath.startsWith(it.canonicalPath + File.separator) })
@@ -107,7 +107,7 @@ object ArchiveEngine {
             throw IOException("Couldn't re-read the new archive, so the originals were kept")
         }
         if (actual < expected) throw IOException("The archive looks incomplete ($actual of $expected files), so the originals were kept")
-        sources.forEach { deleteTree(it) }
+        sources.forEach { remove(it) }
     }
 
     /** Deletes files/folders recursively without ever following symlinks out of the tree. */
