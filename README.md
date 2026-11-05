@@ -6,6 +6,7 @@ A 7-Zip-style file manager and archiver for Android (Kotlin + Jetpack Compose).
 - **Compress** to `7z`, `zip`, `tar`, `tar.gz`
 - **Extract** `7z`, `zip`, `tar`, `tar.gz`, `rar` (RAR 1-4 incl. passworded via junrar; RAR5 via libarchive, unencrypted only). Also opens `.jar`/`.apk` as zip
 - Multiple selection: tap the checklist button (or long-press / tap a plain file) to select many items, then select all/none, compress, extract or delete them together
+- Open an archive and tick just the files/folders you want, then extract only those (all formats, incl. passworded; a folder takes everything inside)
 - Adaptive app icon (with Android 13 themed-icon support) and a splash screen
 - **Delete** selected files/folders (with confirmation; never follows symlinks)
 - Never overwrites: existing folders/archives get a ` (1)` suffix

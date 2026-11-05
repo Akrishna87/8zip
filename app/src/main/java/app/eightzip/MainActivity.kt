@@ -61,6 +61,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** A pending password prompt: which archives, whether the last try was wrong, and the partial selection. */
+data class PwRequest(val archives: List<File>, val wrong: Boolean, val only: List<String>?)
+
 enum class SortBy(val label: String) { NAME("Name"), SIZE("Size"), DATE("Date modified") }
 
 private val dateFmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
@@ -121,7 +124,9 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     var busyFile by remember { mutableStateOf("") }
     var showCompress by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    var pwPrompt by remember { mutableStateOf<Pair<List<File>, Boolean>?>(null) } // archives, wrong-password flag
+    var pwPrompt by remember { mutableStateOf<PwRequest?>(null) }
+    var viewSelected by remember { mutableStateOf(setOf<String>()) } // entry names picked inside the open archive
+    var viewSelectMode by remember { mutableStateOf(false) }
 
     var sortBy by rememberSaveable { mutableStateOf(SortBy.NAME) }
     var ascending by rememberSaveable { mutableStateOf(true) }
@@ -162,36 +167,43 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         if (err == null) { clearSelection(); toast(done) } else toast("Failed: ${err.message}")
     }
 
-    fun doExtract(archives: List<File>, password: CharArray?) = scope.launch {
+    fun doExtract(archives: List<File>, password: CharArray?, only: List<String>? = null) = scope.launch {
         busy = "Extracting"; busyFile = ""
         val err = withContext(Dispatchers.IO) {
             runCatching {
                 archives.forEach {
                     val out = uniqueFile(it.parentFile ?: dir, archiveBase(it))
-                    ArchiveEngine.extract(it, out, Progress { n -> busyFile = n }, password)
+                    ArchiveEngine.extract(it, out, Progress { n -> busyFile = n }, password, only)
                 }
             }.exceptionOrNull()
         }
         busy = null
         refresh()
         when (err) {
-            null -> { clearSelection(); toast(if (archives.size == 1) "Extracted ${archiveBase(archives[0])}" else "Extracted ${archives.size} archives") }
-            is PasswordRequiredException -> pwPrompt = archives to false
-            is WrongPasswordException -> pwPrompt = archives to true
+            null -> {
+                clearSelection(); viewSelected = emptySet(); viewSelectMode = false
+                toast(when {
+                    only != null -> "Extracted ${only.size} selected item" + (if (only.size == 1) "" else "s")
+                    archives.size == 1 -> "Extracted ${archiveBase(archives[0])}"
+                    else -> "Extracted ${archives.size} archives"
+                })
+            }
+            is PasswordRequiredException -> pwPrompt = PwRequest(archives, false, only)
+            is WrongPasswordException -> pwPrompt = PwRequest(archives, true, only)
             else -> toast("Failed: ${err.message}")
         }
     }
 
     fun openArchive(f: File) = scope.launch {
         runCatching { withContext(Dispatchers.IO) { ArchiveEngine.list(f) } }
-            .onSuccess { viewing = f to it }
+            .onSuccess { viewing = f to it; viewSelected = emptySet(); viewSelectMode = false }
             .onFailure { toast("Can't open: ${it.message}") }
     }
 
     val inSelection = selectMode || selected.isNotEmpty()
     BackHandler(enabled = viewing != null || inSelection || searching || dir != root) {
         when {
-            viewing != null -> viewing = null
+            viewing != null -> if (viewSelectMode || viewSelected.isNotEmpty()) { viewSelected = emptySet(); viewSelectMode = false } else viewing = null
             inSelection -> clearSelection()
             searching -> { searching = false; query = "" }
             else -> dir.parentFile?.let { dir = it }
@@ -203,10 +215,27 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         topBar = {
             val v = viewing
             when {
+                v != null && (viewSelectMode || viewSelected.isNotEmpty()) -> TopAppBar(
+                    navigationIcon = { IconButton({ viewSelected = emptySet(); viewSelectMode = false }) { Icon(Icons.Filled.Close, "Exit selection") } },
+                    title = { Text(if (viewSelected.isEmpty()) "Select items" else "${viewSelected.size} selected") },
+                    actions = {
+                        val allNames = v.second.map { it.name }.toSet()
+                        val all = allNames.isNotEmpty() && viewSelected.size == allNames.size
+                        IconButton({ viewSelected = if (all) emptySet() else allNames }) {
+                            Icon(if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll, if (all) "Select none" else "Select all")
+                        }
+                        IconButton({ doExtract(listOf(v.first), null, viewSelected.toList()) }, enabled = viewSelected.isNotEmpty()) {
+                            Icon(Icons.Filled.Unarchive, "Extract selected")
+                        }
+                    }
+                )
                 v != null -> TopAppBar(
                     navigationIcon = { IconButton({ viewing = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                     title = { Text(v.first.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    actions = { IconButton({ doExtract(listOf(v.first), null) }) { Icon(Icons.Filled.Unarchive, "Extract") } }
+                    actions = {
+                        IconButton({ viewSelectMode = true }) { Icon(Icons.Filled.Checklist, "Select items to extract") }
+                        IconButton({ doExtract(listOf(v.first), null) }) { Icon(Icons.Filled.Unarchive, "Extract all") }
+                    }
                 )
                 inSelection -> TopAppBar(
                     navigationIcon = { IconButton({ clearSelection() }) { Icon(Icons.Filled.Close, "Exit selection") } },
@@ -296,15 +325,37 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                 v != null -> Column {
                     val folders = v.second.count { it.isDirectory }
                     val total = v.second.filter { !it.isDirectory }.sumOf { it.size.coerceAtLeast(0) }
+                    val picking = viewSelectMode || viewSelected.isNotEmpty()
                     ListItem(
                         headlineContent = { Text("${v.second.size} items" + if (folders > 0) " · $folders folders" else "") },
-                        supportingContent = { Text("${humanSize(total)} uncompressed · ${humanSize(v.first.length())} archive") },
+                        supportingContent = {
+                            Text(
+                                if (picking) "Tap items to choose what to extract (a folder includes everything in it)"
+                                else "${humanSize(total)} uncompressed · ${humanSize(v.first.length())} archive"
+                            )
+                        },
                         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
                     )
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(v.second) { e ->
+                            val key = e.name
+                            val own = key in viewSelected
+                            // Shown as ticked when it, or a folder above it, is picked.
+                            val inherited = !own && viewSelected.any { sel ->
+                                val folder = sel.trimEnd('/')
+                                key.trimEnd('/').startsWith("$folder/")
+                            }
+                            val ticked = own || inherited
                             ListItem(
-                                leadingContent = { Icon(iconFor(e.name, e.isDirectory), null, tint = MaterialTheme.colorScheme.primary) },
+                                modifier = Modifier.combinedClickable(
+                                    onClick = { viewSelectMode = true; viewSelected = if (own) viewSelected - key else viewSelected + key },
+                                    onLongClick = { viewSelectMode = true; viewSelected = if (own) viewSelected - key else viewSelected + key }
+                                ),
+                                colors = ListItemDefaults.colors(containerColor = if (ticked) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent),
+                                leadingContent = {
+                                    if (picking) Checkbox(ticked, null)
+                                    else Icon(iconFor(e.name, e.isDirectory), null, tint = MaterialTheme.colorScheme.primary)
+                                },
                                 headlineContent = { Text(e.name.trimEnd('/'), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 supportingContent = { if (!e.isDirectory) Text(humanSize(e.size)) }
                             )
@@ -421,7 +472,9 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         )
     }
 
-    pwPrompt?.let { (archives, wrong) ->
+    pwPrompt?.let { req ->
+        val archives = req.archives
+        val wrong = req.wrong
         var pw by remember(archives) { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { pwPrompt = null },
@@ -430,7 +483,7 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
             text = {
                 PasswordField(pw, { pw = it }, if (wrong) "Wrong password, try again" else "Password", isError = wrong)
             },
-            confirmButton = { TextButton(enabled = pw.isNotEmpty(), onClick = { pwPrompt = null; doExtract(archives, pw.toCharArray()) }) { Text("Extract") } },
+            confirmButton = { TextButton(enabled = pw.isNotEmpty(), onClick = { pwPrompt = null; doExtract(archives, pw.toCharArray(), req.only) }) { Text("Extract") } },
             dismissButton = { TextButton({ pwPrompt = null }) { Text("Cancel") } }
         )
     }

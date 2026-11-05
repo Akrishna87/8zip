@@ -50,11 +50,12 @@ object LibArchiveRar5 : Rar5Reader {
         out
     }
 
-    override fun extract(archive: File, resolve: (String) -> File, progress: Progress) = withArchive(archive) { a ->
+    override fun extract(archive: File, resolve: (String) -> File, progress: Progress, accept: (String) -> Boolean) = withArchive(archive) { a ->
         while (true) {
             val e = Archive.readNextHeader(a)
             if (e == 0L) break
             val name = ArchiveEntry.pathnameUtf8(e).orEmpty()
+            if (!accept(name)) continue
             if (ArchiveEntry.isEncrypted(e)) throw IOException("Encrypted RAR5 archives aren't supported yet")
             val target = resolve(name)
             progress.onFile(name)

@@ -155,7 +155,7 @@ class Rar5AndDeleteTest {
         val seen = mutableListOf<String>()
         ArchiveEngine.rar5Reader = object : Rar5Reader {
             override fun list(archive: java.io.File) = listOf(EntryInfo("x.txt", 1, false))
-            override fun extract(archive: java.io.File, resolve: (String) -> java.io.File, progress: Progress) {
+            override fun extract(archive: java.io.File, resolve: (String) -> java.io.File, progress: Progress, accept: (String) -> Boolean) {
                 val out = resolve("dir/x.txt"); out.parentFile.mkdirs(); out.writeText("via backend"); progress.onFile("dir/x.txt"); seen += "ok"
                 try { resolve("../evil.txt"); org.junit.Assert.fail("traversal must be blocked") } catch (e: java.io.IOException) { seen += "blocked" }
             }
@@ -185,5 +185,81 @@ class Rar5AndDeleteTest {
         val single = tmp.resolve("one.txt").apply { writeText("x") }
         ArchiveEngine.deleteTree(single)
         assertTrue(!single.exists())
+    }
+}
+
+
+class PartialExtractTest {
+    private fun fixture(): Pair<java.io.File, java.io.File> {
+        val tmp = Files.createTempDirectory("8zip-part").toFile()
+        val src = tmp.resolve("data").apply { mkdirs() }
+        src.resolve("a.txt").writeText("A")
+        src.resolve("c.txt").writeText("C")
+        src.resolve("sub").mkdirs()
+        src.resolve("sub/b.txt").writeText("B")
+        src.resolve("sub/deep").mkdirs()
+        src.resolve("sub/deep/d.txt").writeText("D")
+        src.resolve("subway.txt").writeText("not inside sub")
+        return tmp to src
+    }
+
+    private fun archives(): List<Triple<String, java.io.File, CharArray?>> {
+        val (tmp, src) = fixture()
+        val out = mutableListOf<Triple<String, java.io.File, CharArray?>>()
+        for (fmt in Format.values().filter { it.canCreate }) {
+            val f = tmp.resolve("plain.${fmt.ext}")
+            ArchiveEngine.compress(listOf(src), f, fmt)
+            out += Triple(fmt.label, f, null)
+            if (fmt.supportsPassword) {
+                val pw = "s3cret".toCharArray()
+                val e = tmp.resolve("enc.${fmt.ext}")
+                ArchiveEngine.compress(listOf(src), e, fmt, password = pw)
+                out += Triple("${fmt.label}+password", e, pw)
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun extractsOnlyTheSelectedFile() {
+        for ((label, f, pw) in archives()) {
+            val dest = f.parentFile.resolve("one_${f.name}")
+            ArchiveEngine.extract(f, dest, password = pw, only = listOf("data/a.txt"))
+            assertEquals("$label a.txt", "A", dest.resolve("data/a.txt").readText())
+            assertTrue("$label: c.txt must not be extracted", !dest.resolve("data/c.txt").exists())
+            assertTrue("$label: sub must not be extracted", !dest.resolve("data/sub").exists())
+        }
+    }
+
+    @Test
+    fun selectingAFolderTakesEverythingInsideButNotLookalikes() {
+        for ((label, f, pw) in archives()) {
+            val dest = f.parentFile.resolve("dir_${f.name}")
+            ArchiveEngine.extract(f, dest, password = pw, only = listOf("data/sub/"))
+            assertEquals("$label b.txt", "B", dest.resolve("data/sub/b.txt").readText())
+            assertEquals("$label d.txt", "D", dest.resolve("data/sub/deep/d.txt").readText())
+            assertTrue("$label: a.txt must not be extracted", !dest.resolve("data/a.txt").exists())
+            assertTrue("$label: 'subway.txt' shares a prefix with 'sub' but isn't inside it", !dest.resolve("data/subway.txt").exists())
+        }
+    }
+
+    @Test
+    fun noSelectionMeansEverything() {
+        for ((label, f, pw) in archives()) {
+            val dest = f.parentFile.resolve("all_${f.name}")
+            ArchiveEngine.extract(f, dest, password = pw)
+            assertEquals(label, "D", dest.resolve("data/sub/deep/d.txt").readText())
+            assertEquals(label, "C", dest.resolve("data/c.txt").readText())
+        }
+    }
+
+    @Test
+    fun rarSelection() {
+        val rar = Files.createTempDirectory("8zip-rarsel").toFile().resolve("t.rar")
+        rar.writeBytes(javaClass.getResourceAsStream("/hello.rar")!!.readBytes())
+        val hit = rar.parentFile.resolve("hit"); ArchiveEngine.extract(rar, hit, only = listOf("hello.txt"))
+        assertEquals("hello from rar\n", hit.resolve("hello.txt").readText())
+        val miss = rar.parentFile.resolve("miss"); ArchiveEngine.extract(rar, miss, only = listOf("other.txt"))
+        assertTrue(!miss.resolve("hello.txt").exists())
     }
 }

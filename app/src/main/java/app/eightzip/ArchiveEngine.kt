@@ -65,7 +65,7 @@ fun interface Progress { fun onFile(name: String) }
 interface Rar5Reader {
     fun list(archive: File): List<EntryInfo>
     /** [resolve] maps an entry name to a safe output file (throws on path traversal). */
-    fun extract(archive: File, resolve: (String) -> File, progress: Progress)
+    fun extract(archive: File, resolve: (String) -> File, progress: Progress, accept: (String) -> Boolean)
 }
 
 /** Pure-JVM archive logic (no Android dependencies) so it can be unit tested. */
@@ -80,6 +80,17 @@ object ArchiveEngine {
             i.read(h) == 8 && h.contentEquals(byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00))
         }
     }.getOrDefault(false)
+
+    /**
+     * Builds the "is this entry wanted" test for a partial extraction. A name selects itself and,
+     * if it is a folder, everything inside it. null means "everything".
+     */
+    internal fun selectionFilter(only: Collection<String>?): (String) -> Boolean {
+        if (only == null) return { true }
+        fun norm(n: String) = n.removePrefix("./").trimEnd('/')
+        val keys = only.map(::norm)
+        return { name -> norm(name).let { n -> keys.any { n == it || n.startsWith("$it/") } } }
+    }
 
     /** Deletes files/folders recursively without ever following symlinks out of the tree. */
     fun deleteTree(f: File) {
@@ -117,18 +128,26 @@ object ArchiveEngine {
      * Throws [PasswordRequiredException] / [WrongPasswordException] for encrypted archives; in that
      * case a destination folder created by this call is removed again.
      */
-    fun extract(archive: File, destDir: File, progress: Progress = Progress {}, password: CharArray? = null) {
+    fun extract(
+        archive: File,
+        destDir: File,
+        progress: Progress = Progress {},
+        password: CharArray? = null,
+        only: Collection<String>? = null
+    ) {
+        val accept = selectionFilter(only)
         val existed = destDir.exists()
         try {
             destDir.mkdirs()
             val root = destDir.canonicalFile
             when (Format.detect(archive) ?: throw IOException("Unsupported archive type")) {
-                Format.ZIP -> extractZip(archive, root, progress, password)
-                Format.SEVEN_Z -> extract7z(archive, root, progress, password)
-                Format.RAR -> extractRar(archive, root, progress, password)
+                Format.ZIP -> extractZip(archive, root, progress, password, accept)
+                Format.SEVEN_Z -> extract7z(archive, root, progress, password, accept)
+                Format.RAR -> extractRar(archive, root, progress, password, accept)
                 else -> openStream(archive).use { s ->
                     var e: ArchiveEntry? = s.nextEntry
                     while (e != null) {
+                        if (!accept(e.name)) { e = s.nextEntry; continue }
                         val target = safeTarget(root, e.name)
                         progress.onFile(e.name)
                         if (e.isDirectory) target.mkdirs() else {
@@ -145,15 +164,16 @@ object ArchiveEngine {
         }
     }
 
-    private fun extractZip(archive: File, root: File, progress: Progress, password: CharArray?) {
+    private fun extractZip(archive: File, root: File, progress: Progress, password: CharArray?, accept: (String) -> Boolean) {
         val zf = ZipFile(archive)
         if (zf.isEncrypted) {
             if (password == null || password.isEmpty()) throw PasswordRequiredException(archive.name)
             zf.setPassword(password)
             // Validate every name first, then let zip4j decrypt and write.
-            zf.fileHeaders.forEach { safeTarget(root, it.fileName); progress.onFile(it.fileName) }
+            val wanted = zf.fileHeaders.filter { accept(it.fileName) }
+            wanted.forEach { safeTarget(root, it.fileName); progress.onFile(it.fileName) }
             try {
-                zf.extractAll(root.path)
+                wanted.forEach { zf.extractFile(it, root.path) }
             } catch (e: ZipException) {
                 if (e.type == ZipException.Type.WRONG_PASSWORD) throw WrongPasswordException()
                 throw IOException(e.message, e)
@@ -162,6 +182,7 @@ object ArchiveEngine {
             ZipArchiveInputStream(BufferedInputStream(archive.inputStream())).use { s ->
                 var e: ArchiveEntry? = s.nextEntry
                 while (e != null) {
+                    if (!accept(e.name)) { e = s.nextEntry; continue }
                     val target = safeTarget(root, e.name)
                     progress.onFile(e.name)
                     if (e.isDirectory) target.mkdirs() else {
@@ -184,9 +205,9 @@ object ArchiveEngine {
         throw IOException("Not a valid RAR archive: ${e.message}")
     }
 
-    private fun extractRar(archive: File, root: File, progress: Progress, password: CharArray?) {
+    private fun extractRar(archive: File, root: File, progress: Progress, password: CharArray?, accept: (String) -> Boolean) {
         if (isRar5(archive)) {
-            (rar5Reader ?: throw IOException(RAR5_UNSUPPORTED)).extract(archive, { safeTarget(root, it) }, progress)
+            (rar5Reader ?: throw IOException(RAR5_UNSUPPORTED)).extract(archive, { safeTarget(root, it) }, progress, accept)
             return
         }
         val hasPw = password != null && password.isNotEmpty()
@@ -196,6 +217,7 @@ object ArchiveEngine {
             try {
                 for (h in headers) {
                     val name = rarName(h)
+                    if (!accept(name)) continue
                     val target = safeTarget(root, name)
                     progress.onFile(name)
                     if (h.isDirectory) target.mkdirs() else {
@@ -212,13 +234,14 @@ object ArchiveEngine {
         }
     }
 
-    private fun extract7z(archive: File, root: File, progress: Progress, password: CharArray?) {
+    private fun extract7z(archive: File, root: File, progress: Progress, password: CharArray?, accept: (String) -> Boolean) {
         val builder = SevenZFile.builder().setFile(archive)
         if (password != null && password.isNotEmpty()) builder.setPassword(password)
         try {
             builder.get().use { z ->
                 var e: SevenZArchiveEntry? = z.nextEntry
                 while (e != null) {
+                    if (!accept(e.name)) { e = z.nextEntry; continue }
                     val target = safeTarget(root, e.name)
                     progress.onFile(e.name)
                     if (e.isDirectory) target.mkdirs() else {
