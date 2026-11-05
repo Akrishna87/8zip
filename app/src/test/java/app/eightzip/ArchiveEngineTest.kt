@@ -263,3 +263,63 @@ class PartialExtractTest {
         assertTrue(!miss.resolve("hello.txt").exists())
     }
 }
+
+
+class DeleteOriginalsTest {
+    private fun fixture(): Pair<java.io.File, List<java.io.File>> {
+        val tmp = Files.createTempDirectory("8zip-orig").toFile()
+        val folder = tmp.resolve("photos").apply { mkdirs() }
+        folder.resolve("1.jpg").writeText("one"); folder.resolve("2.jpg").writeText("two")
+        folder.resolve("sub").mkdirs(); folder.resolve("sub/3.jpg").writeText("three")
+        val file = tmp.resolve("notes.txt").apply { writeText("notes") }
+        return tmp to listOf(folder, file)
+    }
+
+    @Test
+    fun originalsAreDeletedOnlyAfterAVerifiedArchive() {
+        for (fmt in Format.values().filter { it.canCreate }) {
+            val (tmp, sources) = fixture()
+            val archive = tmp.resolve("out.${fmt.ext}")
+            ArchiveEngine.compress(sources, archive, fmt)
+            ArchiveEngine.deleteSourcesAfterCompress(sources, archive)
+            assertTrue("${fmt.label}: originals should be gone", sources.none { it.exists() })
+            val back = tmp.resolve("back_${fmt.ext}")
+            ArchiveEngine.extract(archive, back)
+            assertEquals(fmt.label, "three", back.resolve("photos/sub/3.jpg").readText())
+            assertEquals(fmt.label, "notes", back.resolve("notes.txt").readText())
+        }
+    }
+
+    @Test
+    fun brokenArchiveKeepsTheOriginals() {
+        val (tmp, sources) = fixture()
+        val fake = tmp.resolve("fake.zip").apply { writeText("not really a zip") }
+        try { ArchiveEngine.deleteSourcesAfterCompress(sources, fake); org.junit.Assert.fail("expected IOException") }
+        catch (e: java.io.IOException) { }
+        assertTrue("originals must survive", sources.all { it.exists() })
+        val missing = tmp.resolve("missing.7z")
+        try { ArchiveEngine.deleteSourcesAfterCompress(sources, missing); org.junit.Assert.fail("expected IOException") }
+        catch (e: java.io.IOException) { }
+        assertTrue(sources.all { it.exists() })
+    }
+
+    @Test
+    fun incompleteArchiveKeepsTheOriginals() {
+        val (tmp, sources) = fixture()
+        val onlyOne = tmp.resolve("partial.zip")
+        ArchiveEngine.compress(listOf(sources[1]), onlyOne, Format.ZIP)   // archive holds just notes.txt
+        try { ArchiveEngine.deleteSourcesAfterCompress(sources, onlyOne); org.junit.Assert.fail("expected IOException") }
+        catch (e: java.io.IOException) { assertTrue(e.message.orEmpty(), e.message.orEmpty().contains("incomplete")) }
+        assertTrue(sources.all { it.exists() })
+    }
+
+    @Test
+    fun archiveInsideTheSourcesIsRefused() {
+        val (tmp, sources) = fixture()
+        val inside = sources[0].resolve("inside.zip")
+        ArchiveEngine.compress(listOf(sources[1]), inside, Format.ZIP)
+        try { ArchiveEngine.deleteSourcesAfterCompress(sources, inside); org.junit.Assert.fail("expected IOException") }
+        catch (e: java.io.IOException) { }
+        assertTrue(sources.all { it.exists() })
+    }
+}

@@ -92,6 +92,24 @@ object ArchiveEngine {
         return { name -> norm(name).let { n -> keys.any { n == it || n.startsWith("$it/") } } }
     }
 
+    /**
+     * To be called after a successful [compress]: re-reads [archive], checks it holds every file from
+     * [sources], and only then deletes the sources. Any doubt throws and leaves the originals alone.
+     */
+    fun deleteSourcesAfterCompress(sources: List<File>, archive: File) {
+        if (!archive.isFile || archive.length() == 0L) throw IOException("The archive wasn't created, so the originals were kept")
+        val archivePath = archive.canonicalPath
+        if (sources.any { archivePath == it.canonicalPath || archivePath.startsWith(it.canonicalPath + File.separator) })
+            throw IOException("The archive is inside the items being compressed, so the originals were kept")
+        var expected = 0
+        walk(sources) { f, _ -> if (f.isFile) expected++ }
+        val actual = try { list(archive).count { !it.isDirectory } } catch (e: IOException) {
+            throw IOException("Couldn't re-read the new archive, so the originals were kept")
+        }
+        if (actual < expected) throw IOException("The archive looks incomplete ($actual of $expected files), so the originals were kept")
+        sources.forEach { deleteTree(it) }
+    }
+
     /** Deletes files/folders recursively without ever following symlinks out of the tree. */
     fun deleteTree(f: File) {
         val isLink = f.parentFile?.let { File(it.canonicalFile, f.name).let { x -> x.canonicalPath != x.absolutePath } } ?: false

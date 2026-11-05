@@ -1,5 +1,6 @@
 package app.eightzip
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -123,6 +124,9 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     var busy by remember { mutableStateOf<String?>(null) }
     var busyFile by remember { mutableStateOf("") }
     var showCompress by remember { mutableStateOf(false) }
+    val prefs = remember { activity.getSharedPreferences("settings", Context.MODE_PRIVATE) }
+    var deleteAfterExtract by remember { mutableStateOf(prefs.getBoolean("delete_archive_after_extract", false)) }
+    var confirmEnableDeleteAfterExtract by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var pwPrompt by remember { mutableStateOf<PwRequest?>(null) }
     var viewSelected by remember { mutableStateOf(setOf<String>()) } // entry names picked inside the open archive
@@ -169,11 +173,14 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
 
     fun doExtract(archives: List<File>, password: CharArray?, only: List<String>? = null) = scope.launch {
         busy = "Extracting"; busyFile = ""
+        var deleted = 0
         val err = withContext(Dispatchers.IO) {
             runCatching {
                 archives.forEach {
                     val out = uniqueFile(it.parentFile ?: dir, archiveBase(it))
                     ArchiveEngine.extract(it, out, Progress { n -> busyFile = n }, password, only)
+                    // Only after the whole archive extracted without error, and never for a partial extract.
+                    if (deleteAfterExtract && only == null) { ArchiveEngine.deleteTree(it); deleted++ }
                 }
             }.exceptionOrNull()
         }
@@ -182,10 +189,12 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
         when (err) {
             null -> {
                 clearSelection(); viewSelected = emptySet(); viewSelectMode = false
+                if (deleted > 0) viewing = null // the archive being viewed is gone
+                val gone = if (deleted > 0) (if (deleted == 1) " and deleted the archive" else " and deleted the archives") else ""
                 toast(when {
                     only != null -> "Extracted ${only.size} selected item" + (if (only.size == 1) "" else "s")
-                    archives.size == 1 -> "Extracted ${archiveBase(archives[0])}"
-                    else -> "Extracted ${archives.size} archives"
+                    archives.size == 1 -> "Extracted ${archiveBase(archives[0])}$gone"
+                    else -> "Extracted ${archives.size} archives$gone"
                 })
             }
             is PasswordRequiredException -> pwPrompt = PwRequest(archives, false, only)
@@ -292,6 +301,15 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
                                     text = { Text("Ascending") },
                                     leadingIcon = { Checkbox(ascending, null) },
                                     onClick = { ascending = !ascending }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete archive after extracting") },
+                                    leadingIcon = { Checkbox(deleteAfterExtract, null) },
+                                    onClick = {
+                                        sortMenu = false
+                                        if (deleteAfterExtract) { deleteAfterExtract = false; prefs.edit().putBoolean("delete_archive_after_extract", false).apply() }
+                                        else confirmEnableDeleteAfterExtract = true
+                                    }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Show hidden files") },
@@ -439,11 +457,31 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
     if (showCompress) {
         val src = selected.toList()
         val defaultName = if (src.size == 1) (if (src[0].isDirectory) src[0].name else src[0].nameWithoutExtension) else dir.name.ifEmpty { "archive" }
-        CompressDialog(defaultName, onDismiss = { showCompress = false }) { name, fmt, password ->
+        CompressDialog(defaultName, onDismiss = { showCompress = false }) { name, fmt, password, deleteOriginals ->
             showCompress = false
             val dest = uniqueFile(dir, name.ifBlank { defaultName }, ".${fmt.ext}")
-            run("Compressing", "Created ${dest.name}") { p -> ArchiveEngine.compress(src, dest, fmt, p, password) }
+            run("Compressing", "Created ${dest.name}" + if (deleteOriginals) " and deleted the originals" else "") { p ->
+                ArchiveEngine.compress(src, dest, fmt, p, password)
+                if (deleteOriginals) ArchiveEngine.deleteSourcesAfterCompress(src, dest)
+            }
         }
+    }
+
+    if (confirmEnableDeleteAfterExtract) {
+        AlertDialog(
+            onDismissRequest = { confirmEnableDeleteAfterExtract = false },
+            icon = { Icon(Icons.Filled.Delete, null) },
+            title = { Text("Delete archives after extracting?") },
+            text = { Text("After an archive is fully extracted it will be permanently deleted. Archives that fail to extract, and partial extracts of selected items, are never deleted.") },
+            confirmButton = {
+                TextButton({
+                    deleteAfterExtract = true
+                    prefs.edit().putBoolean("delete_archive_after_extract", true).apply()
+                    confirmEnableDeleteAfterExtract = false
+                }) { Text("Turn on", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton({ confirmEnableDeleteAfterExtract = false }) { Text("Cancel") } }
+        )
     }
 
     if (confirmDelete) {
@@ -490,10 +528,11 @@ fun EightZipApp(activity: ComponentActivity, startFile: File?) {
 }
 
 @Composable
-private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm: (String, Format, CharArray?) -> Unit) {
+private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm: (String, Format, CharArray?, Boolean) -> Unit) {
     var name by remember { mutableStateOf(defaultName) }
     var fmt by remember { mutableStateOf(Format.SEVEN_Z) }
     var pw by remember { mutableStateOf("") }
+    var deleteOriginals by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Filled.Archive, null) },
@@ -512,10 +551,18 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
                     label = if (fmt.supportsPassword) "Password (optional, AES-256)" else "No password support for ${fmt.label}",
                     enabled = fmt.supportsPassword
                 )
+                Row(Modifier.fillMaxWidth().clickable { deleteOriginals = !deleteOriginals }, verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(deleteOriginals, null)
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("Delete originals afterwards")
+                        Text("Only after the archive is checked to contain every file", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    }
+                }
             }
         },
         confirmButton = {
-            TextButton({ onConfirm(name.trim(), fmt, if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null) }) { Text("Compress") }
+            TextButton({ onConfirm(name.trim(), fmt, if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null, deleteOriginals) }) { Text("Compress") }
         },
         dismissButton = { TextButton(onDismiss) { Text("Cancel") } }
     )
