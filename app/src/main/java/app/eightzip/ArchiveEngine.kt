@@ -302,13 +302,20 @@ object ArchiveEngine {
      * Compresses [sources] (files or folders) into [dest]. A non-empty [password] encrypts 7z
      * (AES-256) and zip (AES-256); tar formats cannot be encrypted and reject a password.
      */
-    fun compress(sources: List<File>, dest: File, format: Format, progress: Progress = Progress {}, password: CharArray? = null) {
+    fun compress(
+        sources: List<File>,
+        dest: File,
+        format: Format,
+        progress: Progress = Progress {},
+        password: CharArray? = null,
+        legacyZipCrypto: Boolean = false
+    ) {
         val pw = password?.takeIf { it.isNotEmpty() }
         if (!format.canCreate) throw IOException("${format.label} archives can only be extracted, not created")
         if (pw != null && !format.supportsPassword) throw IOException("${format.label} archives can't be password protected")
         dest.parentFile?.mkdirs()
         when (format) {
-            Format.ZIP -> if (pw != null) zipEncrypted(sources, dest, pw, progress) else
+            Format.ZIP -> if (pw != null) zipEncrypted(sources, dest, pw, progress, legacyZipCrypto) else
                 ZipArchiveOutputStream(dest).use { z ->
                     walk(sources) { f, name ->
                         progress.onFile(name)
@@ -323,7 +330,10 @@ object ArchiveEngine {
             Format.SEVEN_Z -> (if (pw != null) SevenZOutputFile(dest, pw) else SevenZOutputFile(dest)).use { z ->
                 walk(sources) { f, name ->
                     progress.onFile(name)
-                    z.putArchiveEntry(z.createArchiveEntry(f, if (f.isDirectory) "$name/" else name))
+                    val entry = z.createArchiveEntry(f, name) // 7z stores folder names without a trailing slash
+                    entry.hasWindowsAttributes = true
+                    entry.windowsAttributes = if (f.isDirectory) 0x10 else 0x20 // DIRECTORY / ARCHIVE
+                    z.putArchiveEntry(entry)
                     if (f.isFile) f.inputStream().use { i ->
                         val buf = ByteArray(64 * 1024)
                         while (true) { val n = i.read(buf); if (n < 0) break; z.write(buf, 0, n) }
@@ -349,18 +359,26 @@ object ArchiveEngine {
         }
     }
 
-    private fun zipEncrypted(sources: List<File>, dest: File, password: CharArray, progress: Progress) {
+    private fun zipEncrypted(sources: List<File>, dest: File, password: CharArray, progress: Progress, legacy: Boolean) {
         dest.delete()
-        val params = ZipParameters().apply {
+        // zip4j mutates the parameters it is given while adding a folder, which used to leak a path
+        // prefix into later entries, so every source gets its own fresh ZipParameters.
+        fun params() = ZipParameters().apply {
             compressionMethod = CompressionMethod.DEFLATE
             isEncryptFiles = true
-            encryptionMethod = EncryptionMethod.AES
-            aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
+            if (legacy) {
+                // "ZipCrypto": weak, but the only password zip that Windows Explorer and macOS open natively.
+                encryptionMethod = EncryptionMethod.ZIP_STANDARD
+            } else {
+                encryptionMethod = EncryptionMethod.AES
+                aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
+            }
         }
         ZipFile(dest, password).use { zf ->
             sources.forEach {
                 progress.onFile(it.name)
-                if (it.isDirectory) zf.addFolder(it, params) else zf.addFile(it, params)
+                if (it.isDirectory) zf.addFolder(it, params().apply { isIncludeRootFolder = true })
+                else zf.addFile(it, params().apply { fileNameInZip = it.name })
             }
         }
     }

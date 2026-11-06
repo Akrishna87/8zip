@@ -487,3 +487,59 @@ class LatestDownloadTest {
         }
     }
 }
+
+
+class CompatibilityTest {
+    private fun fixture(): Pair<java.io.File, List<java.io.File>> {
+        val tmp = Files.createTempDirectory("8zip-compat").toFile()
+        val folder = tmp.resolve("MyFolder").apply { mkdirs() }
+        folder.resolve("a.txt").writeText("A"); folder.resolve("sub/deep").mkdirs(); folder.resolve("sub/deep/b.txt").writeText("B")
+        val single = tmp.resolve("single.txt").apply { writeText("S") }
+        return tmp to listOf(folder, single)
+    }
+
+    private fun fileNames(a: java.io.File) = ArchiveEngine.list(a).filter { !it.isDirectory }.map { it.name.trimEnd('/') }.sorted()
+
+    @Test
+    fun everyFormatStoresTheSameCleanPaths() {
+        val (tmp, srcs) = fixture()
+        val expected = listOf("MyFolder/a.txt", "MyFolder/sub/deep/b.txt", "single.txt")
+        for (fmt in Format.values().filter { it.canCreate }) {
+            val plain = tmp.resolve("p.${fmt.ext}"); ArchiveEngine.compress(srcs, plain, fmt)
+            assertEquals("${fmt.label} plain", expected, fileNames(plain))
+            if (fmt.supportsPassword) {
+                val enc = tmp.resolve("e.${fmt.ext}"); ArchiveEngine.compress(srcs, enc, fmt, password = "pw".toCharArray())
+                assertEquals("${fmt.label} AES", expected, fileNames(enc))          // used to leak a "parent/" prefix for zip
+            }
+        }
+        val legacy = tmp.resolve("l.zip"); ArchiveEngine.compress(srcs, legacy, Format.ZIP, password = "pw".toCharArray(), legacyZipCrypto = true)
+        assertEquals("zip ZipCrypto", expected, fileNames(legacy))
+    }
+
+    @Test
+    fun sevenZipFolderEntriesHaveNoTrailingSlash() {
+        val (tmp, srcs) = fixture()
+        val a = tmp.resolve("x.7z"); ArchiveEngine.compress(srcs, a, Format.SEVEN_Z)
+        val dirs = ArchiveEngine.list(a).filter { it.isDirectory }.map { it.name }
+        assertTrue(dirs.toString(), dirs.isNotEmpty() && dirs.none { it.endsWith("/") })
+    }
+
+    @Test
+    fun legacyZipCryptoRoundTripsAndWrongPasswordIsCaught() {
+        val (tmp, srcs) = fixture()
+        val z = tmp.resolve("legacy.zip"); ArchiveEngine.compress(srcs, z, Format.ZIP, password = "s3cret".toCharArray(), legacyZipCrypto = true)
+        val out = tmp.resolve("o"); ArchiveEngine.extract(z, out, password = "s3cret".toCharArray())
+        assertEquals("B", out.resolve("MyFolder/sub/deep/b.txt").readText())
+        try { ArchiveEngine.extract(z, tmp.resolve("o2"), password = "nope".toCharArray()); org.junit.Assert.fail("expected WrongPasswordException") }
+        catch (e: WrongPasswordException) { }
+        try { ArchiveEngine.extract(z, tmp.resolve("o3")); org.junit.Assert.fail("expected PasswordRequiredException") }
+        catch (e: PasswordRequiredException) { }
+    }
+
+    @Test
+    fun legacyIsRejectedForFormatsWithoutPasswords() {
+        val (tmp, srcs) = fixture()
+        try { ArchiveEngine.compress(srcs, tmp.resolve("x.tar"), Format.TAR, password = "pw".toCharArray(), legacyZipCrypto = true); org.junit.Assert.fail() }
+        catch (e: java.io.IOException) { }
+    }
+}

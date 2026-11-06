@@ -598,11 +598,11 @@ fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
     if (showCompress) {
         val src = selected.toList()
         val defaultName = if (src.size == 1) (if (src[0].isDirectory) src[0].name else src[0].nameWithoutExtension) else dir.name.ifEmpty { "archive" }
-        CompressDialog(defaultName, onDismiss = { showCompress = false }) { name, fmt, password, deleteOriginals ->
+        CompressDialog(defaultName, onDismiss = { showCompress = false }) { name, fmt, password, deleteOriginals, legacyZip ->
             showCompress = false
             val dest = uniqueFile(dir, name.ifBlank { defaultName }, ".${fmt.ext}")
             run("Compressing", "Created ${dest.name}" + if (deleteOriginals) " and moved the originals to Trash" else "") { p ->
-                ArchiveEngine.compress(src, dest, fmt, p, password)
+                ArchiveEngine.compress(src, dest, fmt, p, password, legacyZip)
                 if (deleteOriginals) ArchiveEngine.deleteSourcesAfterCompress(src, dest) { trash.moveToTrash(it) }
             }
         }
@@ -694,9 +694,10 @@ fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
 }
 
 @Composable
-private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm: (String, Format, CharArray?, Boolean) -> Unit) {
+private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm: (String, Format, CharArray?, Boolean, Boolean) -> Unit) {
     var name by remember { mutableStateOf(defaultName) }
-    var fmt by remember { mutableStateOf(Format.SEVEN_Z) }
+    var fmt by remember { mutableStateOf(Format.ZIP) } // zip opens natively on Windows, macOS, Linux and Android
+    var legacyZip by remember { mutableStateOf(false) }
     var pw by remember { mutableStateOf("") }
     var deleteOriginals by remember { mutableStateOf(false) }
     AlertDialog(
@@ -717,6 +718,28 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
                     label = if (fmt.supportsPassword) "Password (optional, AES-256)" else "No password support for ${fmt.label}",
                     enabled = fmt.supportsPassword
                 )
+                val hasPassword = fmt.supportsPassword && pw.isNotEmpty()
+                if (fmt == Format.ZIP && hasPassword) {
+                    Row(Modifier.fillMaxWidth().clickable { legacyZip = !legacyZip }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(legacyZip, null)
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("Compatible mode (opens in Windows and Mac)")
+                            Text("Uses older ZipCrypto encryption, which is weaker", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                }
+                Text(
+                    when {
+                        fmt == Format.ZIP && !hasPassword -> "Opens everywhere: Windows, macOS, Linux and Android."
+                        fmt == Format.ZIP && legacyZip -> "Opens in Windows Explorer and the Mac Archive Utility. Strong tools aren't needed, but this encryption is weak."
+                        fmt == Format.ZIP -> "Strong AES-256, but on a laptop you need 7-Zip, WinRAR or Keka (Windows Explorer and the Mac Archive Utility can't open it)."
+                        fmt == Format.SEVEN_Z -> "Best compression. On a laptop you need 7-Zip (Windows), Keka (Mac) or p7zip (Linux)."
+                        fmt == Format.TAR_GZ -> "Opens on Mac, Linux and Windows 11. Older Windows needs 7-Zip."
+                        else -> "Opens on Mac and Linux. Windows needs 7-Zip or Windows 11."
+                    },
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline
+                )
                 Row(Modifier.fillMaxWidth().clickable { deleteOriginals = !deleteOriginals }, verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(deleteOriginals, null)
                     Spacer(Modifier.width(8.dp))
@@ -728,7 +751,7 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
             }
         },
         confirmButton = {
-            TextButton({ onConfirm(name.trim(), fmt, if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null, deleteOriginals) }) { Text("Compress") }
+            TextButton({ onConfirm(name.trim(), fmt, if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null, deleteOriginals, legacyZip && fmt == Format.ZIP) }) { Text("Compress") }
         },
         dismissButton = { TextButton(onDismiss) { Text("Cancel") } }
     )
