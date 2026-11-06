@@ -20,6 +20,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream
+import java.util.zip.CRC32
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -357,6 +358,71 @@ object ArchiveEngine {
                 }
             }
         }
+    }
+
+    /**
+     * Re-reads every byte of a just-written [archive] and checks its checksums (zip CRC32, 7z CRC, gzip CRC,
+     * tar headers). Returns how many files were checked; throws IOException if anything is wrong.
+     * Note: a plain .tar has no checksum over file contents, so there only structure and length are checked.
+     */
+    fun verify(archive: File, password: CharArray? = null, progress: Progress = Progress {}): Int {
+        val fmt = Format.detect(archive) ?: throw IOException("Unsupported archive type")
+        var files = 0
+        val buf = ByteArray(64 * 1024)
+        try {
+            when (fmt) {
+                Format.ZIP -> {
+                    val zf = ZipFile(archive)
+                    if (zf.isEncrypted) zf.setPassword(password ?: throw IOException("A password is needed to verify this archive"))
+                    for (h in zf.fileHeaders) {
+                        if (h.isDirectory) continue
+                        progress.onFile(h.fileName)
+                        val crc = CRC32(); var total = 0L
+                        zf.getInputStream(h).use { i ->
+                            while (true) { val n = i.read(buf); if (n < 0) break; crc.update(buf, 0, n); total += n }
+                        }
+                        if (total != h.uncompressedSize) throw IOException("${h.fileName}: expected ${h.uncompressedSize} bytes, read $total")
+                        // AES entries store no CRC (their authentication code is checked while reading above).
+                        if (h.encryptionMethod != EncryptionMethod.AES && crc.value != h.crc) throw IOException("${h.fileName}: checksum mismatch")
+                        files++
+                    }
+                }
+                Format.SEVEN_Z -> {
+                    val b = SevenZFile.builder().setFile(archive)
+                    if (password != null && password.isNotEmpty()) b.setPassword(password)
+                    b.get().use { z ->
+                        var e: SevenZArchiveEntry? = z.nextEntry
+                        while (e != null) {
+                            if (!e.isDirectory) {
+                                progress.onFile(e.name)
+                                var total = 0L
+                                while (true) { val n = z.read(buf); if (n < 0) break; total += n }
+                                if (total != e.size) throw IOException("${e.name}: expected ${e.size} bytes, read $total")
+                                files++
+                            }
+                            e = z.nextEntry
+                        }
+                    }
+                }
+                Format.TAR, Format.TAR_GZ -> openStream(archive).use { s ->
+                    var e: ArchiveEntry? = s.nextEntry
+                    while (e != null) {
+                        if (!e.isDirectory) {
+                            progress.onFile(e.name)
+                            var total = 0L
+                            while (true) { val n = s.read(buf); if (n < 0) break; total += n }
+                            if (total != e.size) throw IOException("${e.name}: expected ${e.size} bytes, read $total")
+                            files++
+                        }
+                        e = s.nextEntry
+                    }
+                }
+                Format.RAR -> throw IOException("Verifying RAR archives isn't supported")
+            }
+        } catch (e: ZipException) {
+            throw IOException(e.message ?: "The archive is damaged", e)
+        }
+        return files
     }
 
     private fun zipEncrypted(sources: List<File>, dest: File, password: CharArray, progress: Progress, legacy: Boolean) {

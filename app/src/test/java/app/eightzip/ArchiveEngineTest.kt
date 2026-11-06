@@ -543,3 +543,50 @@ class CompatibilityTest {
         catch (e: java.io.IOException) { }
     }
 }
+
+
+class VerifyTest {
+    private fun fixture(): Pair<java.io.File, List<java.io.File>> {
+        val tmp = Files.createTempDirectory("8zip-verify").toFile()
+        val folder = tmp.resolve("data").apply { mkdirs() }
+        folder.resolve("text.txt").writeText("some compressible text ".repeat(5000))
+        folder.resolve("rand.bin").writeBytes(ByteArray(400_000).also { java.util.Random(7).nextBytes(it) })
+        folder.resolve("sub").mkdirs(); folder.resolve("sub/small.txt").writeText("small")
+        folder.resolve("empty.txt").writeText("")
+        return tmp to listOf(folder)
+    }
+
+    @Test
+    fun goodArchivesVerifyInEveryFormatAndMode() {
+        val (tmp, srcs) = fixture()
+        for (fmt in Format.values().filter { it.canCreate }) {
+            val a = tmp.resolve("g.${fmt.ext}"); ArchiveEngine.compress(srcs, a, fmt)
+            assertEquals("${fmt.label}", 4, ArchiveEngine.verify(a))
+            if (fmt.supportsPassword) {
+                val e = tmp.resolve("e.${fmt.ext}"); ArchiveEngine.compress(srcs, e, fmt, password = "pw".toCharArray())
+                assertEquals("${fmt.label} AES", 4, ArchiveEngine.verify(e, "pw".toCharArray()))
+            }
+        }
+        val z = tmp.resolve("legacy.zip"); ArchiveEngine.compress(srcs, z, Format.ZIP, password = "pw".toCharArray(), legacyZipCrypto = true)
+        assertEquals(4, ArchiveEngine.verify(z, "pw".toCharArray()))
+    }
+
+    @Test
+    fun corruptedArchivesAreCaught() {
+        val (tmp, srcs) = fixture()
+        for (fmt in Format.values().filter { it.canCreate }) {
+            val a = tmp.resolve("bad.${fmt.ext}"); ArchiveEngine.compress(srcs, a, fmt)
+            val bytes = a.readBytes()
+            // A plain .tar has no checksums over file data, so only truncation/header damage can be detected there.
+            for (pos in if (fmt == Format.TAR) emptyList() else listOf(bytes.size / 3, bytes.size / 2)) {   // flip bits inside the data
+                val damaged = bytes.copyOf().also { it[pos] = (it[pos].toInt() xor 0x5A).toByte() }
+                val b = tmp.resolve("damaged_${pos}.${fmt.ext}"); b.writeBytes(damaged)
+                try { ArchiveEngine.verify(b); org.junit.Assert.fail("${fmt.label}: damage at byte $pos went unnoticed") }
+                catch (e: java.io.IOException) { }
+            }
+            val cut = tmp.resolve("cut.${fmt.ext}"); cut.writeBytes(bytes.copyOf(bytes.size * 2 / 3))   // a truncated copy
+            try { ArchiveEngine.verify(cut); org.junit.Assert.fail("${fmt.label}: truncation went unnoticed") }
+            catch (e: java.io.IOException) { }
+        }
+    }
+}

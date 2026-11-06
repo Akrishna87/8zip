@@ -601,8 +601,14 @@ fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
         CompressDialog(defaultName, onDismiss = { showCompress = false }) { name, fmt, password, deleteOriginals, legacyZip ->
             showCompress = false
             val dest = uniqueFile(dir, name.ifBlank { defaultName }, ".${fmt.ext}")
-            run("Compressing", "Created ${dest.name}" + if (deleteOriginals) " and moved the originals to Trash" else "") { p ->
+            run("Compressing", "Created ${dest.name} (${humanSize(dest.length().coerceAtLeast(0))}, checked ✓)" + if (deleteOriginals) " and moved the originals to Trash" else "") { p ->
                 ArchiveEngine.compress(src, dest, fmt, p, password, legacyZip)
+                // Re-read the new archive right away: a damaged one is deleted and reported, never handed over.
+                busyFile = "Checking the archive…"
+                try { ArchiveEngine.verify(dest, password, p) } catch (e: java.io.IOException) {
+                    dest.delete()
+                    throw java.io.IOException("The new archive failed its check (${e.message}), so it was deleted. Your files are untouched.")
+                }
                 if (deleteOriginals) ArchiveEngine.deleteSourcesAfterCompress(src, dest) { trash.moveToTrash(it) }
             }
         }
