@@ -697,7 +697,7 @@ fun EightZipApp(activity: ComponentActivity, launchIntent: Intent?) {
 private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm: (String, Format, CharArray?, Boolean, Boolean) -> Unit) {
     var name by remember { mutableStateOf(defaultName) }
     var fmt by remember { mutableStateOf(Format.ZIP) } // zip opens natively on Windows, macOS, Linux and Android
-    var legacyZip by remember { mutableStateOf(false) }
+    var strongAes by remember { mutableStateOf(false) } // off = ZipCrypto, which opens in Windows Explorer and macOS
     var pw by remember { mutableStateOf("") }
     var deleteOriginals by remember { mutableStateOf(false) }
     AlertDialog(
@@ -720,21 +720,21 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
                 )
                 val hasPassword = fmt.supportsPassword && pw.isNotEmpty()
                 if (fmt == Format.ZIP && hasPassword) {
-                    Row(Modifier.fillMaxWidth().clickable { legacyZip = !legacyZip }, verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(legacyZip, null)
+                    Row(Modifier.fillMaxWidth().clickable { strongAes = !strongAes }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(strongAes, null)
                         Spacer(Modifier.width(8.dp))
                         Column {
-                            Text("Compatible mode (opens in Windows and Mac)")
-                            Text("Uses older ZipCrypto encryption, which is weaker", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            Text("Stronger encryption (AES-256)")
+                            Text("Needs 7-Zip, WinRAR or Keka to open on a laptop", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                         }
                     }
                 }
                 Text(
                     when {
-                        fmt == Format.ZIP && !hasPassword -> "Opens everywhere: Windows, macOS, Linux and Android."
-                        fmt == Format.ZIP && legacyZip -> "Opens in Windows Explorer and the Mac Archive Utility. Strong tools aren't needed, but this encryption is weak."
-                        fmt == Format.ZIP -> "Strong AES-256, but on a laptop you need 7-Zip, WinRAR or Keka (Windows Explorer and the Mac Archive Utility can't open it)."
-                        fmt == Format.SEVEN_Z -> "Best compression. On a laptop you need 7-Zip (Windows), Keka (Mac) or p7zip (Linux)."
+                        fmt == Format.ZIP && !hasPassword -> "Opens on Windows, macOS, Linux and Android without extra software."
+                        fmt == Format.ZIP && strongAes -> "Strong AES-256. On a laptop you need 7-Zip, WinRAR or Keka: Windows Explorer and the Mac Archive Utility can't open it."
+                        fmt == Format.ZIP -> "Opens on Windows, macOS and Linux without extra software. Uses older ZipCrypto encryption, which is weaker: tick \"Stronger encryption\" for sensitive files."
+                        fmt == Format.SEVEN_Z -> "Best compression, but not built into Windows or macOS. Opening it on a laptop needs 7-Zip (Windows), Keka (Mac) or p7zip (Linux). Choose zip if unsure."
                         fmt == Format.TAR_GZ -> "Opens on Mac, Linux and Windows 11. Older Windows needs 7-Zip."
                         else -> "Opens on Mac and Linux. Windows needs 7-Zip or Windows 11."
                     },
@@ -751,7 +751,7 @@ private fun CompressDialog(defaultName: String, onDismiss: () -> Unit, onConfirm
             }
         },
         confirmButton = {
-            TextButton({ onConfirm(name.trim(), fmt, if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null, deleteOriginals, legacyZip && fmt == Format.ZIP) }) { Text("Compress") }
+            TextButton({ onConfirm(name.trim(), fmt, if (fmt.supportsPassword && pw.isNotEmpty()) pw.toCharArray() else null, deleteOriginals, fmt == Format.ZIP && !strongAes) }) { Text("Compress") }
         },
         dismissButton = { TextButton(onDismiss) { Text("Cancel") } }
     )
